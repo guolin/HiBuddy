@@ -186,6 +186,8 @@ struct AppModel {
   String assetVersion{kDefaultAssetVersion};
   String petPackId{"demo-pack"};
   bool demoMode{false};
+  bool faceDownSleepActive{false};
+  uint32_t motionDizzyUntilMs{0};
   bool wifiSetupRequested{false};
   bool pairSetupRequested{false};
   bool restartRequested{false};

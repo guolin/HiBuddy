@@ -88,20 +88,20 @@ String overviewHeadline(const AppModel& model) {
   return stateText(model.snapshot.petState);
 }
 
-String companionLine(const AppModel& model) {
-  if (model.demoMode) {
-    return fitText(model.snapshot.focusTitle, 22);
+String petHeadline(const AppModel& model) {
+  if (model.motionDizzyUntilMs > millis()) {
+    return "Dizzy";
   }
-  if (model.wifiState != WifiUiState::Ready) {
-    return "Open menu to connect";
+  if (model.snapshot.petState == PetState::Idle) {
+    return "";
   }
-  if (model.pairState != PairUiState::Ready) {
-    return "Pair me to get live data";
+  if (!model.demoMode && model.wifiState != WifiUiState::Ready) {
+    return "Offline";
   }
-  if (model.runtimeState == RuntimeUiState::Degraded) {
-    return model.network.mqttConnected ? "Waiting for fresh update" : "Trying to reconnect";
+  if (!model.demoMode && model.pairState != PairUiState::Ready) {
+    return "Unpaired";
   }
-  return fitText(model.snapshot.focusTitle, 22);
+  return stateText(model.snapshot.petState);
 }
 
 String overviewFocusText(const AppModel& model) {
@@ -319,12 +319,6 @@ void UiRouter::handleButton(const ButtonEvent& event, AppModel& model) {
     return;
   }
 
-  if (model.reminder.active != ReminderType::None && event.button == ButtonId::B &&
-      event.gesture == ButtonGesture::ShortPress) {
-    model.reminder.active = ReminderType::None;
-    return;
-  }
-
   if (event.button == ButtonId::A && event.gesture == ButtonGesture::LongPress) {
     if (model.overlay == OverlayState::Menu) {
       size_t count = 0;
@@ -458,19 +452,12 @@ void UiRouter::handleButton(const ButtonEvent& event, AppModel& model) {
   cycleBaseScreen(model, event.button == ButtonId::A);
 }
 
-void UiRouter::tick(AppModel& model) {
-  if (model.reminder.active != ReminderType::None &&
-      millis() - model.reminder.startedAtMs > kReminderDurationMs) {
-    model.reminder.active = ReminderType::None;
-  }
-}
+void UiRouter::tick(AppModel&) {}
 
 void UiRouter::draw(const AppModel& model, const PetRuntime& petRuntime) const {
   beginFrame();
 
-  if (model.reminder.active != ReminderType::None) {
-    drawReminder(model, petRuntime);
-  } else if (isGuideVisible(model)) {
+  if (isGuideVisible(model)) {
     drawGuide(model);
   } else {
     drawBase(model, petRuntime);
@@ -508,12 +495,11 @@ void UiRouter::drawBase(const AppModel& model, const PetRuntime& petRuntime) con
 }
 
 void UiRouter::drawPet(const AppModel& model, const PetRuntime& petRuntime) const {
-  auto& canvas = frameBuffer();
   petRuntime.draw(4, 8, 8, model.snapshot.petState);
-  drawCenteredCopy(stateText(model.snapshot.petState), 160, 0xFFE0, 4);
-  drawCenteredCopy(companionLine(model), 198, TFT_WHITE, 2);
-  canvas.setTextColor(0x8C71, TFT_BLACK);
-  canvas.drawCentreString(fitText(model.petName, 18), canvas.width() / 2, 220, 2);
+  const String headline = petHeadline(model);
+  if (!headline.isEmpty()) {
+    drawCenteredCopy(headline, 180, 0xFFE0, 4);
+  }
 }
 
 void UiRouter::drawOverview(const AppModel& model, const PetRuntime& petRuntime) const {
@@ -654,13 +640,6 @@ void UiRouter::drawVolumeOverlay(const AppModel& model) const {
                                    sizeof(kVolumeSteps) / sizeof(kVolumeSteps[0]));
   canvas.setTextColor(0xBDF7, 0x18C3);
   canvas.drawCentreString("Current: " + levelLabel(active), canvas.width() / 2, y + h - 22, 1);
-}
-
-void UiRouter::drawReminder(const AppModel& model, const PetRuntime& petRuntime) const {
-  petRuntime.draw(40, 24, kPetScale, model.snapshot.petState);
-  drawCenteredCopy(String(reinterpret_cast<const __FlashStringHelper*>(toFlashString(model.reminder.active))), 118,
-                   TFT_WHITE, 4);
-  drawCenteredCopy(fitText(model.snapshot.focusTitle, 22), 162, TFT_WHITE, 2);
 }
 
 }  // namespace buddy

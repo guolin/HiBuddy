@@ -13,9 +13,6 @@ class SnapshotRuntime {
  private:
   PetState lastPetState_{PetState::Idle};
   bool staleLatched_{false};
-
-  ReminderType reminderFor(PetState state) const;
-  void activateReminder(AppModel& model, ReminderType reminder) const;
 };
 
 }  // namespace buddy

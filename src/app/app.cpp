@@ -1,6 +1,7 @@
 #include "app/app.h"
 
 #include <M5Unified.h>
+#include <math.h>
 
 #include "app_config.h"
 #include "board/board_init.h"
@@ -9,6 +10,13 @@ namespace buddy {
 
 namespace {
 constexpr uint32_t kDemoStepIntervalMs = 8000;
+constexpr uint32_t kMotionDizzyMs = 2200;
+constexpr uint32_t kShakeCooldownMs = 1800;
+constexpr uint32_t kFaceDownHoldMs = 450;
+constexpr float kShakeDeltaThreshold = 1.05f;
+constexpr float kDominantZThreshold = 0.78f;
+constexpr float kFlatAxisThreshold = 0.42f;
+constexpr float kWakeZThreshold = 0.45f;
 }
 
 void BuddyApp::clearMqttRuntime() {
@@ -84,6 +92,7 @@ void BuddyApp::begin() {
 void BuddyApp::tick() {
   processButton();
   wifiManager_.tick(model_.network, model_.settings);
+  processMotion();
 
   if (model_.network.wifiConnected && !lastWifiConnected_) {
     settingsStore_.save(model_.settings);
@@ -108,6 +117,7 @@ void BuddyApp::tick() {
   petRuntime_.tick(model_);
   snapshotRuntime_.tick(model_);
   updateSystemState();
+  updateDisplaySleep();
   uiRouter_.tick(model_);
   uiRouter_.draw(model_, petRuntime_);
   delay(16);
@@ -169,10 +179,10 @@ void BuddyApp::bootstrapRuntime() {
 void BuddyApp::updateSystemState() {
   const uint32_t now = millis();
 
-  if (now - lastInteractionAt_ > kScreenSleepMs && model_.overlay == OverlayState::None &&
-      model_.reminder.active == ReminderType::None) {
+  const bool idleSleep =
+      now - lastInteractionAt_ > kScreenSleepMs && model_.overlay == OverlayState::None;
+  if (model_.faceDownSleepActive || idleSleep) {
     model_.systemState = SystemState::ScreenSleep;
-    model_.snapshot.petState = PetState::Sleep;
   }
 
   if (model_.network.wifiConnected) {
@@ -221,7 +231,7 @@ void BuddyApp::updateSystemState() {
     }
   }
 
-  if (model_.systemState == SystemState::ScreenSleep) {
+  if (model_.faceDownSleepActive || idleSleep) {
     return;
   }
 
@@ -267,6 +277,8 @@ void BuddyApp::processButton() {
   lastInteractionAt_ = millis();
   if (model_.systemState == SystemState::ScreenSleep) {
     model_.systemState = SystemState::Running;
+    model_.faceDownSleepActive = false;
+    model_.motionDizzyUntilMs = 0;
     return;
   }
 
@@ -301,6 +313,95 @@ void BuddyApp::processButton() {
              model_.demoMode != previousDemoMode) {
     settingsStore_.save(model_.settings);
   }
+}
+
+void BuddyApp::processMotion() {
+  float ax = 0.0f;
+  float ay = 0.0f;
+  float az = 0.0f;
+  if (!M5.Imu.getAccel(&ax, &ay, &az)) {
+    return;
+  }
+
+  const uint32_t now = millis();
+  const float absX = fabsf(ax);
+  const float absY = fabsf(ay);
+  const float absZ = fabsf(az);
+
+  if (!imuOrientationCalibrated_ && absZ >= kDominantZThreshold && absX < 0.7f && absY < 0.7f) {
+    screenUpZSign_ = az >= 0.0f ? 1.0f : -1.0f;
+    imuOrientationCalibrated_ = true;
+    Serial.printf("[buddy][imu] calibrated screenUpZSign=%.0f\n", screenUpZSign_);
+  }
+
+  if (accelValid_) {
+    const float deltaX = ax - lastAccelX_;
+    const float deltaY = ay - lastAccelY_;
+    const float deltaZ = az - lastAccelZ_;
+    const float shakeDelta = sqrtf(deltaX * deltaX + deltaY * deltaY + deltaZ * deltaZ);
+    if (!model_.faceDownSleepActive && now - lastShakeAt_ >= kShakeCooldownMs && shakeDelta >= kShakeDeltaThreshold) {
+      lastShakeAt_ = now;
+      model_.motionDizzyUntilMs = now + kMotionDizzyMs;
+      lastInteractionAt_ = now;
+      Serial.printf("[buddy][imu] shake detected delta=%.2f dizzy_until=%lu\n", shakeDelta,
+                    static_cast<unsigned long>(model_.motionDizzyUntilMs));
+    }
+  }
+
+  lastAccelX_ = ax;
+  lastAccelY_ = ay;
+  lastAccelZ_ = az;
+  accelValid_ = true;
+
+  if (!imuOrientationCalibrated_) {
+    return;
+  }
+
+  const bool faceDownNow =
+      (az * screenUpZSign_) <= -kDominantZThreshold && absX <= kFlatAxisThreshold && absY <= kFlatAxisThreshold;
+  const bool faceUpNow = (az * screenUpZSign_) >= -kWakeZThreshold;
+
+  if (!model_.faceDownSleepActive) {
+    if (faceDownNow) {
+      if (faceDownCandidateAt_ == 0) {
+        faceDownCandidateAt_ = now;
+      } else if (now - faceDownCandidateAt_ >= kFaceDownHoldMs) {
+        model_.faceDownSleepActive = true;
+        model_.motionDizzyUntilMs = 0;
+        faceDownCandidateAt_ = 0;
+        faceUpCandidateAt_ = 0;
+        Serial.println("[buddy][imu] face-down sleep active");
+      }
+    } else {
+      faceDownCandidateAt_ = 0;
+    }
+    return;
+  }
+
+  if (faceUpNow) {
+    if (faceUpCandidateAt_ == 0) {
+      faceUpCandidateAt_ = now;
+    } else if (now - faceUpCandidateAt_ >= 180) {
+      model_.faceDownSleepActive = false;
+      model_.systemState = SystemState::Running;
+      lastInteractionAt_ = now;
+      faceUpCandidateAt_ = 0;
+      faceDownCandidateAt_ = 0;
+      Serial.println("[buddy][imu] face-down sleep cleared");
+    }
+  } else {
+    faceUpCandidateAt_ = 0;
+  }
+}
+
+void BuddyApp::updateDisplaySleep() {
+  const bool shouldSleep = model_.systemState == SystemState::ScreenSleep;
+  if (shouldSleep == displaySleepApplied_) {
+    return;
+  }
+
+  displaySleepApplied_ = shouldSleep;
+  applyBacklight(shouldSleep ? 0 : model_.settings.brightness);
 }
 
 void BuddyApp::pollPairingBootstrap() {

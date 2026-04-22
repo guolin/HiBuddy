@@ -11,11 +11,7 @@ void SnapshotRuntime::begin(const Snapshot& snapshot) {
 
 void SnapshotRuntime::onSnapshot(AppModel& model) {
   staleLatched_ = false;
-  const ReminderType nextReminder = reminderFor(model.snapshot.petState);
-  if (model.snapshot.petState != lastPetState_ && nextReminder != ReminderType::None) {
-    activateReminder(model, nextReminder);
-  }
-
+  model.reminder.active = ReminderType::None;
   lastPetState_ = model.snapshot.petState;
 }
 
@@ -34,25 +30,7 @@ void SnapshotRuntime::tick(AppModel& model) {
 
   staleLatched_ = true;
   model.snapshot.petState = PetState::Offline;
-  activateReminder(model, ReminderType::Stale);
-}
-
-ReminderType SnapshotRuntime::reminderFor(PetState state) const {
-  switch (state) {
-    case PetState::Waiting:
-      return ReminderType::Waiting;
-    case PetState::Error:
-      return ReminderType::Error;
-    case PetState::Done:
-      return ReminderType::Done;
-    default:
-      return ReminderType::None;
-  }
-}
-
-void SnapshotRuntime::activateReminder(AppModel& model, ReminderType reminder) const {
-  model.reminder.active = reminder;
-  model.reminder.startedAtMs = millis();
+  model.reminder.active = ReminderType::None;
 }
 
 }  // namespace buddy

@@ -11,7 +11,7 @@ class UiRouter {
   void begin();
   void handleButton(const ButtonEvent& event, AppModel& model);
   void tick(AppModel& model);
- void draw(const AppModel& model, const PetRuntime& petRuntime) const;
+  void draw(const AppModel& model, const PetRuntime& petRuntime) const;
 
  private:
   StatusLights statusLights_;
@@ -27,7 +27,6 @@ class UiRouter {
   void drawMenuOverlay(const AppModel& model) const;
   void drawBrightnessOverlay(const AppModel& model) const;
   void drawVolumeOverlay(const AppModel& model) const;
-  void drawReminder(const AppModel& model, const PetRuntime& petRuntime) const;
 };
 
 }  // namespace buddy
