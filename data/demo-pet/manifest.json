@@ -1,0 +1,11 @@
+{
+  "id": "demo-pack",
+  "name": "Buddy Demo",
+  "version": "demo-1.0.0",
+  "frame_width": 16,
+  "frame_height": 16,
+  "frame_count": 10,
+  "display_scale": 5,
+  "palette_size": 6,
+  "default_fps": 8
+}
