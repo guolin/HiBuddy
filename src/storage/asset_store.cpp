@@ -9,21 +9,22 @@ constexpr const char* kDemoManifest = R"json({
   "id": "demo-pack",
   "name": "Buddy Demo",
   "version": "demo-1.0.0",
-  "frame_width": 16,
-  "frame_height": 16,
-  "frame_count": 10,
-  "display_scale": 5,
-  "palette_size": 6,
+  "frame_width": 32,
+  "frame_height": 32,
+  "frame_count": 26,
+  "display_scale": 4,
+  "palette_size": 9,
   "default_fps": 8,
   "states": {
-    "idle": [0, 1],
-    "thinking": [0, 2],
-    "busy": [3, 4],
-    "waiting": [5, 2],
-    "done": [6, 1],
-    "error": [7, 8],
-    "sleep": [9],
-    "offline": [9, 7]
+    "sleep": [0, 1, 2],
+    "idle": [3, 4, 5, 6, 7],
+    "thinking": [8, 9, 10, 11],
+    "busy": [8, 9, 10, 11],
+    "waiting": [12, 13, 14, 15],
+    "done": [16, 17, 18, 19],
+    "error": [20, 21, 22],
+    "offline": [20, 21, 22],
+    "heart": [23, 24, 25]
   }
 })json";
 }

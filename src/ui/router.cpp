@@ -68,13 +68,23 @@ String fitText(const String& text, uint8_t maxChars) {
   return text.substring(0, maxChars - 3) + "...";
 }
 
+String statLabel(const uint8_t value) {
+  if (value >= 76) {
+    return "High";
+  }
+  if (value >= 41) {
+    return "Mid";
+  }
+  return "Low";
+}
+
 String stateText(const PetState state) {
   return String(reinterpret_cast<const __FlashStringHelper*>(toFlashString(state)));
 }
 
 String overviewHeadline(const AppModel& model) {
   if (model.demoMode) {
-    return stateText(model.snapshot.petState);
+    return "Pet summary";
   }
   if (model.wifiState != WifiUiState::Ready) {
     return "Need Wi-Fi";
@@ -85,7 +95,7 @@ String overviewHeadline(const AppModel& model) {
   if (model.runtimeState == RuntimeUiState::Degraded) {
     return model.network.mqttConnected ? "Snapshot stale" : "Offline";
   }
-  return stateText(model.snapshot.petState);
+  return "Pet summary";
 }
 
 String petHeadline(const AppModel& model) {
@@ -258,6 +268,19 @@ void drawInfoSection(const String& title, const String& value, int16_t y, uint16
   canvas.drawCentreString(title, canvas.width() / 2, y, 2);
   canvas.setTextColor(accent, TFT_BLACK);
   canvas.drawCentreString(value, canvas.width() / 2, y + 22, valueFont);
+}
+
+void drawStatBar(const String& label, uint8_t value, int16_t y, uint16_t accent) {
+  auto& canvas = frameBuffer();
+  constexpr int16_t kBarX = 16;
+  constexpr int16_t kBarW = 103;
+  constexpr int16_t kBarH = 14;
+  canvas.setTextColor(0xBDF7, TFT_BLACK);
+  canvas.drawString(label, kBarX, y, 2);
+  canvas.setTextColor(TFT_WHITE, TFT_BLACK);
+  canvas.drawRightString(statLabel(value), canvas.width() - 16, y, 2);
+  canvas.drawRoundRect(kBarX, y + 20, kBarW, kBarH, 6, 0x5AEB);
+  canvas.fillRoundRect(kBarX + 2, y + 22, ((kBarW - 4) * value) / 100, kBarH - 4, 5, accent);
 }
 
 void drawMenuCard(const String& title, int16_t x, int16_t y, int16_t w, int16_t h) {
@@ -495,30 +518,22 @@ void UiRouter::drawBase(const AppModel& model, const PetRuntime& petRuntime) con
 }
 
 void UiRouter::drawPet(const AppModel& model, const PetRuntime& petRuntime) const {
-  petRuntime.draw(4, 8, 8, model.snapshot.petState);
+  petRuntime.draw(4, 8, 4, model.snapshot.petState);
   const String headline = petHeadline(model);
   if (!headline.isEmpty()) {
     drawCenteredCopy(headline, 180, 0xFFE0, 4);
   }
+  statusLights_.draw(model.snapshot, 27, 210, 16, 8);
 }
 
 void UiRouter::drawOverview(const AppModel& model, const PetRuntime& petRuntime) const {
-  auto& canvas = frameBuffer();
-  canvas.setTextColor(0xFFE0, TFT_BLACK);
-  canvas.drawCentreString(overviewHeadline(model), canvas.width() / 2, 12, 4);
-
-  petRuntime.draw(43, 56, 3, model.snapshot.petState);
-
-  canvas.setTextColor(0xBDF7, TFT_BLACK);
-  canvas.drawCentreString("Focus", canvas.width() / 2, 102, 2);
-  drawCenteredCopy(overviewFocusText(model), 124, TFT_WHITE, 2);
-
-  canvas.setTextColor(0xBDF7, TFT_BLACK);
-  canvas.drawCentreString("Sessions", canvas.width() / 2, 152, 2);
-  statusLights_.draw(model.snapshot, 27, 176, 16, 8);
-
-  drawCenteredCopy(overviewOnlineLabel(model), 204, overviewOnlineLabel(model) == "Online" ? 0x07E0 : 0xFD20, 2);
-  drawCenteredCopy(requiresUserLine(model), 222, 0xC618, 1);
+  (void)petRuntime;
+  drawCenteredCopy(overviewHeadline(model), 12, 0xFFE0, 2);
+  drawStatBar("Mood", model.petStats.mood, 42, 0xFCAA);
+  drawStatBar("Energy", model.petStats.energy, 98, 0xA7E0);
+  drawStatBar("Focus", model.petStats.focus, 154, 0x8D7F);
+  drawCenteredCopy(overviewOnlineLabel(model), 208, overviewOnlineLabel(model) == "Online" ? 0x07E0 : 0xFD20, 2);
+  drawCenteredCopy(requiresUserLine(model), 224, 0xC618, 1);
 }
 
 void UiRouter::drawInfo(const AppModel& model) const {

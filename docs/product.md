@@ -2,202 +2,174 @@
 
 ## Positioning
 
-Buddy V1 is a small networked desktop pet for AI coding agents.
-
-## Current implementation status
-
-The product direction is broader than the code that is wired up today.
-
-Current implemented pieces:
-
-- local CLI aggregation and local preview
-- web auth and account session handling
-- one-device binding with `device_id` + `device_key`
-- CLI key issuance
-
-Not yet wired into the main runtime loop:
-
-- MQTT delivery
-- real device rendering loop
-- pet pack ownership / commerce
+Buddy V1 is a small AI companion device built for `M5StickS3`.
 
 It is not:
 
-- a full terminal
-- a dense dashboard
+- a terminal
 - a chat client
+- a dense dashboard
 
 It is:
 
-- a glanceable state companion
-- a lightweight reminder device
-- a customizable pet display
+- a glanceable AI companion
+- a pet-driven status display
+- a lightweight reminder and ambient presence device
 
-## Fixed V1 hardware
+## Core Product Model
 
-Current reference hardware in this repository:
+Buddy V1 uses a two-layer runtime:
+
+- upstream `snapshot` describes AI work truth
+- device-local pet logic turns that truth into animation and personality
+
+The device should feel alive, but it should not invent fake work facts.
+
+## Fixed V1 Hardware
+
+Current reference hardware:
 
 - `M5StickS3`
 
-The UI is designed around a small screen and a 64x64 pet sprite.
+Hardware assumptions:
 
-## Fixed binding model
+- `135x240` portrait screen
+- two hardware buttons
+- IMU available
+- battery-powered handheld behavior
 
-- One account drives one Buddy device in V1.
-- One CLI installation logs into one account.
-- One CLI installation binds to one device.
-- One device binds to one account.
-- One user keeps only one active pet in V1.
+## Main User Value
 
-Planned but not fully implemented yet:
-
-- One account can own multiple pet packs.
-
-This is intentionally restrictive so the first version stays easy to reason about.
-
-## Core user value
-
-Buddy should let the user understand, in one glance:
+The user should understand at a glance:
 
 - whether the agent is active
 - whether something needs attention
 - whether work just finished
-- which pet is currently on duty
+- how the pet feels right now
 
-## Product principles
+## Product Principles
 
-### Upstream computes, device renders
+### Upstream computes work truth
 
-The device does not infer raw session truth.
-
-The CLI computes:
+Upstream is responsible for:
 
 - active sessions
 - waiting sessions
-- error sessions
-- top session
-- headline and subtitle
+- error state
+- focus title
+- token summary
 
-The device renders:
+### Device computes pet behavior
 
-- pet state
-- short text
-- light summary
-- temporary reminder animations
+The device is responsible for:
 
-### The home screen shows only the most important layer
+- pet animation state
+- `mood / energy / focus`
+- shake response
+- sleep / wake behavior
+- local rendering and pacing
 
-Home should not be a log window.
+### Pet emotion should not mirror raw internal wording
 
-Home includes:
+Buddy should react emotionally, not look like a log viewer.
 
-- one 64x64 pet
-- one headline
-- one subtitle
-- one summary line
+## Main Pages
 
-### Business state is translated into pet state
+Buddy V1 has three main pages.
 
-The pet should react emotionally, not mirror internal terms literally.
+### Pet
 
-Recommended mapping:
+Shows:
 
-- `active but calm` -> `thinking`
-- `many tasks running` -> `busy`
-- `needs attention` -> `waiting`
-- `just finished` -> `done`
-- `problem detected` -> `error`
-- `offline or idle for long` -> `sleep`
+- the pet as the main visual
+- session status dots
+- optional short state word when useful
 
-## Main Views
+Does not show:
 
-The main screen uses three display modes:
+- bars
+- detailed device information
 
-### Image
+### Overview
 
-Show:
+Shows:
 
-- current pet sprite only
+- `mood`
+- `energy`
+- `focus`
 
-### Mixed
+Representation:
 
-Show:
+- three compact bars
+- no raw numeric values
 
-- current pet sprite
-- one focus line
-- one short status line
+This is the pet summary page.
 
 ### Info
 
-Show:
+Shows device information only:
 
-- current pet state
-- focus summary
-- Wi-Fi state
-- MQTT state
-- device id
+- battery
+- charging
+- Wi‑Fi
+- SSID
 - firmware version
 
-## Interaction model
+This is not the pet summary page.
 
-- `Short press`: next view / next item
-- `Long press`: open menu / confirm / back
-- `B`: reserved for system actions such as pairing
+## Pet Attributes
 
-Additional rules:
+V1 uses three local pet attributes:
 
-- first press after screen-off only wakes
-- important reminders may jump back to Home
-- device returns to Home after transient reminder states
+- `mood`
+- `energy`
+- `focus`
 
-## Reminder model
+V1 does not include `affection` as a formal runtime stat.
 
-Only important transitions should interrupt the user:
+### Mood
 
-- entering `waiting`
-- entering `error`
-- entering `done`
-- becoming stale after long silence
+Represents recent emotional tone.
 
-Each reminder should use:
+### Energy
 
-- a one-shot pet animation
-- optional tone or LED cue
-- short temporary copy
+Represents stamina and restfulness.
 
-## Pet commerce direction
+### Focus
 
-Buddy sells complete pet packs.
+Represents how concentrated the pet currently feels.
 
-A pet pack includes:
+## Motion and Sleep
 
-- character identity
-- sprite states
-- palette
-- preview
-- pricing metadata
+### Friendly shake
 
-It does not sell:
+A light, infrequent shake can:
 
-- single frames
-- single expressions
-- core product features
+- slightly improve mood
+- trigger a short positive animation
 
-### Ownership rules
+### Rough shake
 
-These are product-direction rules, not a fully implemented flow yet:
+A harsh or frequent shake should:
 
-- new users receive one free random pack from the free base pool
-- users may own multiple packs
-- users may activate only one pet at a time on the device
-- buying a pack unlocks the whole pack
+- trigger dizzy behavior
+- not keep rewarding the pet
 
-For the V1 base release, only the first random pet grant is part of the required scope. Store purchase, extra pet ownership, voice, and TTS remain follow-up expansions.
+### Face-down nap
 
-## What V1 does not do
+Face-down sleep is a core V1 behavior.
 
-- approvals from hardware
-- multiple simultaneous devices
-- multi-account CLI switching
-- complex pet progression systems
-- large transcript browsing on device
+It should:
+
+- put the device into pet sleep mode
+- restore energy
+- feel like a natural rest action for handheld hardware
+
+## What V1 Does Not Do
+
+- `affection` as a live system stat
+- cloud-synced pet mood
+- multiple pets at runtime
+- large transcript browsing
+- hardware approvals
+- complex progression systems

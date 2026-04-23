@@ -48,8 +48,8 @@ constexpr uint32_t kPortalRetryIntervalMs = 12000;
 constexpr uint32_t kPairBootstrapPollMs = 5000;
 constexpr uint32_t kPairCodeLifetimeMs = 5 * 60 * 1000;
 constexpr uint32_t kPairCodeRefreshLeadMs = 10 * 1000;
-constexpr uint16_t kPetSpriteSize = 16;
-constexpr uint16_t kPetScale = 5;
+constexpr uint16_t kPetSpriteSize = 32;
+constexpr uint16_t kPetScale = 4;
 constexpr uint16_t kSessionLightCount = 4;
 
 }  // namespace buddy

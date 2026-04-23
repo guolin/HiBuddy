@@ -4,6 +4,7 @@
 #include "board/input.h"
 #include "net/api_client.h"
 #include "net/mqtt_client.h"
+#include "pet/pet_stats.h"
 #include "net/wifi_manager.h"
 #include "pet/pet_runtime.h"
 #include "runtime/snapshot_runtime.h"
@@ -23,6 +24,7 @@ class BuddyApp {
   InputManager input_;
   UiRouter uiRouter_;
   PetRuntime petRuntime_;
+  PetStatsRuntime petStatsRuntime_;
   SnapshotRuntime snapshotRuntime_;
   SettingsStore settingsStore_;
   AssetStore assetStore_;
@@ -45,6 +47,8 @@ class BuddyApp {
   uint32_t lastShakeAt_{0};
   uint32_t faceDownCandidateAt_{0};
   uint32_t faceUpCandidateAt_{0};
+  uint8_t lastSavedPetEnergy_{70};
+  uint32_t lastPetEnergySavedAt_{0};
 
   void bootstrapRuntime();
   void updateSystemState();
@@ -58,6 +62,7 @@ class BuddyApp {
   void handleUiActions();
   void tickDemoMode();
   void applyDemoSnapshot(uint8_t scenarioIndex);
+  void persistPetEnergyIfNeeded(bool force = false);
 };
 
 }  // namespace buddy

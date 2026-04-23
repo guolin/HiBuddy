@@ -54,6 +54,7 @@ DeviceSettings SettingsStore::load() {
   settings.wifiPassword = prefs.getString("wifi_pass", "");
   settings.brightness = normalizeBrightness(prefs.getUChar("bright", settings.brightness));
   settings.volume = normalizeVolume(prefs.getUChar("volume", settings.volume));
+  settings.petEnergy = prefs.getUChar("pet_energy", settings.petEnergy);
   settings.demoMode = prefs.getBool("demo_mode", settings.demoMode);
   settings.preferredBaseScreen =
       static_cast<BaseScreen>(prefs.getUChar("home_view", static_cast<uint8_t>(BaseScreen::Overview)));
@@ -73,6 +74,7 @@ bool SettingsStore::save(const DeviceSettings& settings) {
   prefs.putString("wifi_pass", settings.wifiPassword);
   prefs.putUChar("bright", normalizeBrightness(settings.brightness));
   prefs.putUChar("volume", normalizeVolume(settings.volume));
+  prefs.putUChar("pet_energy", settings.petEnergy);
   prefs.putBool("demo_mode", settings.demoMode);
   prefs.putUChar("home_view", static_cast<uint8_t>(settings.preferredBaseScreen));
   prefs.end();

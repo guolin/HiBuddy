@@ -47,15 +47,16 @@ def parse_frames():
 
     frame_rows = []
     for chunk in re.finditer(r'\{\{(.*?)\}\}', block.group(1), re.S):
-        rows = re.findall(r'"([.nbtpwryh]{16})"', chunk.group(1))
-        if len(rows) != 16:
-            raise RuntimeError(f"Bad frame row count: expected 16, got {len(rows)}")
+        rows = re.findall(r'"([.nbtpwryh]{32})"', chunk.group(1))
+        if len(rows) != 32:
+            raise RuntimeError(f"Bad frame row count: expected 32, got {len(rows)}")
         frame_rows.append(rows)
     return frame_rows
 
 
 def draw_frame(rows):
-    image = Image.new("RGBA", (16 * PIXEL, 16 * PIXEL), (0, 0, 0, 0))
+    sprite_size = len(rows)
+    image = Image.new("RGBA", (sprite_size * PIXEL, sprite_size * PIXEL), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
     for y, row in enumerate(rows):
         for x, key in enumerate(row):
@@ -77,8 +78,9 @@ def draw_frame(rows):
 def main():
     frames = parse_frames()
     max_frames = max(FRAME_COUNTS)
-    frame_w = 16 * PIXEL
-    frame_h = 16 * PIXEL
+    sprite_size = len(frames[0][0])
+    frame_w = sprite_size * PIXEL
+    frame_h = sprite_size * PIXEL
     width = PADDING + max_frames * (frame_w + PADDING) + PADDING
     height = PADDING + len(STATE_NAMES) * (LABEL_HEIGHT + frame_h + PADDING) + PADDING
 

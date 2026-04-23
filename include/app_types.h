@@ -119,6 +119,16 @@ struct Snapshot {
   uint32_t todayTokens{0};
 };
 
+struct PetStats {
+  uint8_t mood{60};
+  uint8_t energy{70};
+  uint8_t focus{50};
+  uint32_t lastInteractionMs{0};
+  uint32_t lastRestMs{0};
+  uint32_t lastFriendlyShakeAtMs{0};
+  uint32_t heartUntilMs{0};
+};
+
 struct DeviceSettings {
   String deviceId{kDefaultDeviceId};
   String deviceToken;
@@ -126,6 +136,7 @@ struct DeviceSettings {
   String wifiPassword;
   uint8_t brightness{192};
   uint8_t volume{75};
+  uint8_t petEnergy{70};
   bool demoMode{false};
   BaseScreen preferredBaseScreen{BaseScreen::Overview};
 };
@@ -178,6 +189,7 @@ struct AppModel {
   bool pairConfirmPending{false};
   uint8_t menuIndex{0};
   Snapshot snapshot;
+  PetStats petStats;
   DeviceSettings settings;
   PairingState pairing;
   NetworkState network;

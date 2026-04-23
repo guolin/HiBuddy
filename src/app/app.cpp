@@ -12,8 +12,11 @@ namespace {
 constexpr uint32_t kDemoStepIntervalMs = 8000;
 constexpr uint32_t kMotionDizzyMs = 2200;
 constexpr uint32_t kShakeCooldownMs = 1800;
+constexpr uint32_t kFriendlyShakeMinDeltaMs = 7000;
 constexpr uint32_t kFaceDownHoldMs = 450;
 constexpr float kShakeDeltaThreshold = 1.05f;
+constexpr float kFriendlyShakeDeltaThreshold = 1.15f;
+constexpr float kRoughShakeDeltaThreshold = 1.9f;
 constexpr float kDominantZThreshold = 0.78f;
 constexpr float kFlatAxisThreshold = 0.42f;
 constexpr float kWakeZThreshold = 0.45f;
@@ -74,6 +77,7 @@ void BuddyApp::begin() {
   input_.begin();
   uiRouter_.begin();
   petRuntime_.begin();
+  petStatsRuntime_.begin(model_);
   snapshotRuntime_.begin(model_.snapshot);
   wifiManager_.begin(model_.settings);
   apiClient_.begin(kApiBaseUrl);
@@ -83,6 +87,8 @@ void BuddyApp::begin() {
   updateSystemState();
   lastWifiConnected_ = model_.network.wifiConnected;
   lastInteractionAt_ = millis();
+  lastSavedPetEnergy_ = model_.petStats.energy;
+  lastPetEnergySavedAt_ = millis();
   if (model_.demoMode) {
     applyDemoSnapshot(0);
     lastDemoStepAt_ = millis();
@@ -107,6 +113,7 @@ void BuddyApp::tick() {
     tickDemoMode();
   } else if (model_.pairing.paired) {
     if (mqttClient_.tick(model_.network, model_.snapshot)) {
+      petStatsRuntime_.onSnapshot(model_);
       snapshotRuntime_.onSnapshot(model_);
     }
   } else {
@@ -115,9 +122,11 @@ void BuddyApp::tick() {
   }
 
   petRuntime_.tick(model_);
+  petStatsRuntime_.tick(model_);
   snapshotRuntime_.tick(model_);
   updateSystemState();
   updateDisplaySleep();
+  persistPetEnergyIfNeeded();
   uiRouter_.tick(model_);
   uiRouter_.draw(model_, petRuntime_);
   delay(16);
@@ -160,6 +169,7 @@ void BuddyApp::bootstrapRuntime() {
 
   const BootstrapPayload bootstrap = apiClient_.bootstrap(model_.settings);
   if (bootstrap.ok && bootstrap.paired) {
+    const bool wasPaired = model_.pairing.paired;
     model_.pairing.paired = true;
     model_.pairing.statusLabel = "Bound";
     model_.pairing.errorDetail = "";
@@ -168,6 +178,9 @@ void BuddyApp::bootstrapRuntime() {
     model_.assetVersion = bootstrap.assetVersion;
     applyBootstrapToNetwork(bootstrap);
     mqttClient_.configure(model_.network);
+    if (!wasPaired) {
+      petStatsRuntime_.onPairSuccess(model_);
+    }
   } else {
     clearMqttRuntime();
     mqttClient_.disconnect();
@@ -275,6 +288,7 @@ void BuddyApp::processButton() {
   }
 
   lastInteractionAt_ = millis();
+  model_.petStats.lastInteractionMs = lastInteractionAt_;
   if (model_.systemState == SystemState::ScreenSleep) {
     model_.systemState = SystemState::Running;
     model_.faceDownSleepActive = false;
@@ -341,6 +355,12 @@ void BuddyApp::processMotion() {
     const float shakeDelta = sqrtf(deltaX * deltaX + deltaY * deltaY + deltaZ * deltaZ);
     if (!model_.faceDownSleepActive && now - lastShakeAt_ >= kShakeCooldownMs && shakeDelta >= kShakeDeltaThreshold) {
       lastShakeAt_ = now;
+      if (shakeDelta >= kRoughShakeDeltaThreshold) {
+        petStatsRuntime_.onRoughShake(model_);
+      } else if (shakeDelta >= kFriendlyShakeDeltaThreshold &&
+                 now - model_.petStats.lastFriendlyShakeAtMs >= kFriendlyShakeMinDeltaMs) {
+        petStatsRuntime_.onFriendlyShake(model_);
+      }
       model_.motionDizzyUntilMs = now + kMotionDizzyMs;
       lastInteractionAt_ = now;
       Serial.printf("[buddy][imu] shake detected delta=%.2f dizzy_until=%lu\n", shakeDelta,
@@ -401,7 +421,13 @@ void BuddyApp::updateDisplaySleep() {
   }
 
   displaySleepApplied_ = shouldSleep;
+  if (shouldSleep) {
+    petStatsRuntime_.onSleep(model_);
+  } else {
+    petStatsRuntime_.onWake(model_);
+  }
   applyBacklight(shouldSleep ? 0 : model_.settings.brightness);
+  persistPetEnergyIfNeeded(true);
 }
 
 void BuddyApp::pollPairingBootstrap() {
@@ -436,6 +462,7 @@ void BuddyApp::pollPairingBootstrap() {
 
   Serial.printf("[buddy][pair] paired=true mqttTopic=%s pet=%s version=%s\n", bootstrap.mqttTopic.c_str(),
                 bootstrap.petPackId.c_str(), bootstrap.assetVersion.c_str());
+  const bool wasPaired = model_.pairing.paired;
   model_.pairing.paired = true;
   model_.pairing.statusLabel = "Bound";
   model_.pairing.errorDetail = "";
@@ -444,6 +471,9 @@ void BuddyApp::pollPairingBootstrap() {
   model_.assetVersion = bootstrap.assetVersion;
   applyBootstrapToNetwork(bootstrap);
   mqttClient_.configure(model_.network);
+  if (!wasPaired) {
+    petStatsRuntime_.onPairSuccess(model_);
+  }
 }
 
 void BuddyApp::tickDemoMode() {
@@ -510,7 +540,28 @@ void BuddyApp::applyDemoSnapshot(uint8_t scenarioIndex) {
 
   model_.snapshot = snapshot;
   model_.network.lastSnapshotMs = millis();
+  petStatsRuntime_.onSnapshot(model_);
   snapshotRuntime_.onSnapshot(model_);
+}
+
+void BuddyApp::persistPetEnergyIfNeeded(bool force) {
+  const uint32_t now = millis();
+  const uint8_t currentEnergy = model_.petStats.energy;
+  const uint8_t diff =
+      currentEnergy > lastSavedPetEnergy_ ? currentEnergy - lastSavedPetEnergy_ : lastSavedPetEnergy_ - currentEnergy;
+
+  if (!force && diff < 8) {
+    return;
+  }
+  if (!force && now - lastPetEnergySavedAt_ < 60000) {
+    return;
+  }
+
+  model_.settings.petEnergy = currentEnergy;
+  if (settingsStore_.save(model_.settings)) {
+    lastSavedPetEnergy_ = currentEnergy;
+    lastPetEnergySavedAt_ = now;
+  }
 }
 
 }  // namespace buddy
