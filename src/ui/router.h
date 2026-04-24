@@ -27,6 +27,7 @@ class UiRouter {
   void drawMenuOverlay(const AppModel& model) const;
   void drawBrightnessOverlay(const AppModel& model) const;
   void drawVolumeOverlay(const AppModel& model) const;
+  void drawPetSelectOverlay(const AppModel& model) const;
 };
 
 }  // namespace buddy

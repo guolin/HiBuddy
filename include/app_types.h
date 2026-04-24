@@ -32,6 +32,7 @@ enum class OverlayState : uint8_t {
   Menu,
   Brightness,
   Volume,
+  PetSelect,
 };
 
 enum class GuideScreen : uint8_t {
@@ -134,6 +135,7 @@ struct DeviceSettings {
   String deviceToken;
   String wifiSsid;
   String wifiPassword;
+  bool useExperimentalPetPack{false};
   uint8_t brightness{192};
   uint8_t volume{75};
   uint8_t petEnergy{70};

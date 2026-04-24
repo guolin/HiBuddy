@@ -344,6 +344,7 @@ void BuddyApp::processButton() {
 
   const uint8_t previousBrightness = model_.settings.brightness;
   const uint8_t previousVolume = model_.settings.volume;
+  const bool previousPetPackMode = model_.settings.useExperimentalPetPack;
   const BaseScreen previousBaseScreen = model_.currentBaseScreen;
   const bool previousDemoMode = model_.demoMode;
 
@@ -369,8 +370,8 @@ void BuddyApp::processButton() {
   if (model_.settings.brightness != previousBrightness) {
     applyBacklight(model_.settings.brightness);
     settingsStore_.save(model_.settings);
-  } else if (model_.settings.volume != previousVolume || model_.currentBaseScreen != previousBaseScreen ||
-             model_.demoMode != previousDemoMode) {
+  } else if (model_.settings.volume != previousVolume || model_.settings.useExperimentalPetPack != previousPetPackMode ||
+             model_.currentBaseScreen != previousBaseScreen || model_.demoMode != previousDemoMode) {
     settingsStore_.save(model_.settings);
   }
 }
@@ -401,6 +402,7 @@ void BuddyApp::processMotion() {
     const float shakeDelta = sqrtf(deltaX * deltaX + deltaY * deltaY + deltaZ * deltaZ);
     if (!model_.faceDownSleepActive && now - lastShakeAt_ >= kShakeCooldownMs && shakeDelta >= kShakeDeltaThreshold) {
       lastShakeAt_ = now;
+      petRuntime_.onShake();
       if (shakeDelta >= kRoughShakeDeltaThreshold) {
         petStatsRuntime_.onRoughShake(model_);
       } else if (shakeDelta >= kFriendlyShakeDeltaThreshold &&
@@ -408,6 +410,8 @@ void BuddyApp::processMotion() {
         petStatsRuntime_.onFriendlyShake(model_);
       }
       model_.motionDizzyUntilMs = now + kMotionDizzyMs;
+      faceDownCandidateAt_ = 0;
+      faceUpCandidateAt_ = 0;
       lastInteractionAt_ = now;
       Serial.printf("[buddy][imu] shake detected delta=%.2f dizzy_until=%lu\n", shakeDelta,
                     static_cast<unsigned long>(model_.motionDizzyUntilMs));
@@ -428,6 +432,10 @@ void BuddyApp::processMotion() {
   const bool faceUpNow = (az * screenUpZSign_) >= -kWakeZThreshold;
 
   if (!model_.faceDownSleepActive) {
+    if (model_.motionDizzyUntilMs > now) {
+      faceDownCandidateAt_ = 0;
+      return;
+    }
     if (faceDownNow) {
       if (faceDownCandidateAt_ == 0) {
         faceDownCandidateAt_ = now;

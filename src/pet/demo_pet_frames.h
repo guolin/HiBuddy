@@ -469,23 +469,23 @@ constexpr DemoFrame kDemoFrames[] = {
 };
 
 constexpr PetAnimClip kPetAnimClips[] = {
-    {0, 3, 420, 180, PetLoopMode::PingPong, false},   // sleep
-    {3, 5, 260, 160, PetLoopMode::Loop, true},        // idle
-    {8, 4, 150, 0, PetLoopMode::Loop, false},         // busy
-    {12, 4, 180, 60, PetLoopMode::Loop, false},       // attention
-    {16, 4, 130, 120, PetLoopMode::Loop, false},      // celebrate
-    {20, 3, 200, 80, PetLoopMode::PingPong, false},   // dizzy
-    {23, 3, 140, 160, PetLoopMode::PlayOnce, false},  // heart
+    {0, 8, 420, 180, PetLoopMode::PingPong, false},    // sleep
+    {8, 8, 320, 160, PetLoopMode::Loop, true},         // idle
+    {16, 8, 150, 0, PetLoopMode::Loop, false},         // busy
+    {24, 8, 320, 140, PetLoopMode::Loop, true},        // attention
+    {32, 8, 130, 120, PetLoopMode::Loop, false},       // celebrate
+    {40, 8, 200, 80, PetLoopMode::PingPong, false},    // dizzy
+    {48, 8, 140, 160, PetLoopMode::PlayOnce, false},   // heart
 };
 
 constexpr PetMotionProfile kPetMotionProfiles[] = {
-    {0, 0, 0, 2, 820, 1380, 12, 10, 5},   // sleep
-    {-1, 1, 0, 3, 720, 1180, 16, 16, 8},  // idle
-    {-1, 1, 0, 1, 420, 700, 6, 14, 4},    // busy
-    {-1, 1, 0, 2, 360, 620, 10, 8, 3},    // attention
-    {-1, 1, 0, 3, 220, 360, 8, 0, 0},     // celebrate
-    {-2, 2, 0, 2, 150, 260, 6, 0, 0},     // dizzy
-    {-1, 1, -1, 1, 180, 280, 0, 0, 0},    // heart
+    {0, 0, 0, 1, 620, 920, 18, 10, 5},    // sleep
+    {-1, 1, 0, 1, 620, 960, 20, 16, 8},    // idle
+    {-1, 1, 0, 1, 320, 520, 12, 14, 4},    // busy
+    {0, 0, 0, 0, 460, 720, 20, 4, 1},      // attention
+    {-1, 1, 0, 1, 200, 320, 10, 0, 0},     // celebrate
+    {-1, 1, 0, 1, 180, 280, 8, 0, 0},      // dizzy
+    {-1, 1, 0, 1, 150, 240, 0, 0, 0},      // heart
 };
 
 inline const PetAnimClip& clipFor(PetAnimState state) {

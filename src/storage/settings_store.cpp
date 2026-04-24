@@ -58,6 +58,7 @@ DeviceSettings SettingsStore::load() {
   settings.deviceToken = prefs.getString("device_tok", "");
   settings.wifiSsid = prefs.getString("wifi_ssid", "");
   settings.wifiPassword = prefs.getString("wifi_pass", "");
+  settings.useExperimentalPetPack = prefs.getBool("pet_pack64", settings.useExperimentalPetPack);
   settings.brightness = normalizeBrightness(prefs.getUChar("bright", settings.brightness));
   settings.volume = normalizeVolume(prefs.getUChar("volume", settings.volume));
   settings.petEnergy = prefs.getUChar("pet_energy", settings.petEnergy);
@@ -78,6 +79,7 @@ bool SettingsStore::save(const DeviceSettings& settings) {
   prefs.putString("device_tok", settings.deviceToken);
   prefs.putString("wifi_ssid", settings.wifiSsid);
   prefs.putString("wifi_pass", settings.wifiPassword);
+  prefs.putBool("pet_pack64", settings.useExperimentalPetPack);
   prefs.putUChar("bright", normalizeBrightness(settings.brightness));
   prefs.putUChar("volume", normalizeVolume(settings.volume));
   prefs.putUChar("pet_energy", settings.petEnergy);

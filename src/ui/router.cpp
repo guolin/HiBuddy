@@ -9,6 +9,7 @@ namespace buddy {
 namespace {
 
 enum class MenuAction : uint8_t {
+  Pet,
   Brightness,
   Volume,
   Wifi,
@@ -23,6 +24,7 @@ struct MenuEntry {
 };
 
 constexpr MenuEntry kRestrictedWifiMenu[] = {
+    {MenuAction::Pet, "Pet Pack"},
     {MenuAction::Wifi, "Set up Wi-Fi"},
     {MenuAction::Brightness, "Brightness"},
     {MenuAction::Demo, "Demo"},
@@ -30,6 +32,7 @@ constexpr MenuEntry kRestrictedWifiMenu[] = {
 };
 
 constexpr MenuEntry kRestrictedPairMenu[] = {
+    {MenuAction::Pet, "Pet Pack"},
     {MenuAction::Pair, "Pair Device"},
     {MenuAction::Wifi, "Wi-Fi"},
     {MenuAction::Brightness, "Brightness"},
@@ -38,6 +41,7 @@ constexpr MenuEntry kRestrictedPairMenu[] = {
 };
 
 constexpr MenuEntry kFullMenu[] = {
+    {MenuAction::Pet, "Pet Pack"},
     {MenuAction::Brightness, "Brightness"},
     {MenuAction::Volume, "Volume"},
     {MenuAction::Wifi, "Wi-Fi"},
@@ -99,8 +103,14 @@ String overviewHeadline(const AppModel& model) {
 }
 
 String petHeadline(const AppModel& model) {
-  if (model.motionDizzyUntilMs > millis()) {
+  if (model.motionDizzyUntilMs > millis() ||
+      (!model.demoMode && model.runtimeState == RuntimeUiState::Degraded && model.petStats.mood <= 32) ||
+      model.snapshot.petState == PetState::Error) {
     return "Dizzy";
+  }
+  if (model.systemState == SystemState::ScreenSleep || model.snapshot.petState == PetState::Sleep ||
+      model.faceDownSleepActive || model.petStats.energy <= 18) {
+    return "Sleep";
   }
   if (model.snapshot.petState == PetState::Idle || model.snapshot.petState == PetState::Offline) {
     return "";
@@ -142,7 +152,7 @@ String overviewOnlineLabel(const AppModel& model) {
 
 String requiresUserLine(const AppModel& model) {
   if (model.demoMode) {
-    return model.snapshot.requiresUser ? "Needs your attention" : "Demo mode active";
+    return model.snapshot.requiresUser ? "Need attention" : "Demo mode active";
   }
   if (model.wifiState != WifiUiState::Ready) {
     return "Connect Wi-Fi first";
@@ -325,14 +335,14 @@ PetCueState resolvePetCueState(const AppModel& model) {
   if (model.petStats.heartUntilMs > millis() || model.snapshot.petState == PetState::Done) {
     return PetCueState::Heart;
   }
-  if (model.systemState == SystemState::ScreenSleep || model.snapshot.petState == PetState::Sleep ||
-      model.faceDownSleepActive || model.petStats.energy <= 18) {
-    return PetCueState::Sleep;
-  }
   if (model.motionDizzyUntilMs > millis() ||
       (!model.demoMode && model.runtimeState == RuntimeUiState::Degraded && model.petStats.mood <= 32) ||
       model.snapshot.petState == PetState::Error) {
     return PetCueState::Dizzy;
+  }
+  if (model.systemState == SystemState::ScreenSleep || model.snapshot.petState == PetState::Sleep ||
+      model.faceDownSleepActive || model.petStats.energy <= 18) {
+    return PetCueState::Sleep;
   }
   if (model.snapshot.requiresUser || model.snapshot.petState == PetState::Waiting) {
     return PetCueState::Waiting;
@@ -355,13 +365,6 @@ void drawDiamondGlyph(int16_t x, int16_t y, uint16_t color) {
   auto& canvas = frameBuffer();
   canvas.fillTriangle(x, y - 4, x + 4, y, x, y + 4, color);
   canvas.fillTriangle(x, y - 4, x - 4, y, x, y + 4, color);
-}
-
-void drawPetGround() {
-  auto& canvas = frameBuffer();
-  canvas.fillRoundRect(32, 154, 72, 10, 5, 0x2104);
-  canvas.fillRoundRect(40, 158, 56, 6, 3, 0x18C3);
-  canvas.drawRoundRect(40, 158, 56, 6, 3, 0x5AEB);
 }
 
 void drawPetCue(const AppModel& model) {
@@ -426,7 +429,7 @@ void drawPetFooterCard(const StatusLights& statusLights, const AppModel& model) 
 
   if (needsAttention) {
     canvas.setTextColor(0xC618, kCardBg);
-    canvas.drawCentreString("Needs your attention", canvas.width() / 2, hasHeadline ? 202 : 196, 1);
+    canvas.drawCentreString("Need attention", canvas.width() / 2, hasHeadline ? 202 : 196, 1);
   }
 
   statusLights.draw(model.snapshot, lightsX, kLightsY, kLightSize, kLightGap);
@@ -456,7 +459,7 @@ void drawOverviewHeaderCard(const AppModel& model, const PetRuntime& petRuntime)
 
   canvas.fillRoundRect(kCardX, kCardY, kCardW, kCardH, 12, kCardBg);
   canvas.drawRoundRect(kCardX, kCardY, kCardW, kCardH, 12, 0x5AEB);
-  petRuntime.draw(kCardX + 4, kCardY + 4, 2, model.snapshot.petState);
+  petRuntime.draw(kCardX + 4, kCardY + 4, 1, model.snapshot.petState);
 
   canvas.fillCircle(kStatusDotX, kCardY + 12, 3, overviewOnlineColor(model));
   if (needsAction) {
@@ -472,7 +475,7 @@ void drawOverviewHeaderCard(const AppModel& model, const PetRuntime& petRuntime)
 
 void drawOverviewFooterMeta(const AppModel& model) {
   if (model.snapshot.requiresUser) {
-    drawLabelValue("Action", "Needs you", 224, 1);
+    drawLabelValue("Action", "Need you", 224, 1);
     return;
   }
   if (model.demoMode) {
@@ -523,6 +526,11 @@ void openVolumeMenu(AppModel& model) {
                               sizeof(kVolumeSteps) / sizeof(kVolumeSteps[0]));
 }
 
+void openPetMenu(AppModel& model) {
+  model.overlay = OverlayState::PetSelect;
+  model.menuIndex = model.settings.useExperimentalPetPack ? 0 : 1;
+}
+
 }  // namespace
 
 void UiRouter::begin() {}
@@ -560,6 +568,9 @@ void UiRouter::handleButton(const ButtonEvent& event, AppModel& model) {
       }
 
       switch (entries[model.menuIndex].action) {
+        case MenuAction::Pet:
+          openPetMenu(model);
+          break;
         case MenuAction::Brightness:
           openBrightnessMenu(model);
           break;
@@ -605,9 +616,20 @@ void UiRouter::handleButton(const ButtonEvent& event, AppModel& model) {
     if (model.overlay == OverlayState::Volume) {
       if (model.menuIndex >= 4) {
         model.overlay = OverlayState::Menu;
-        model.menuIndex = 1;
+        model.menuIndex = 2;
       } else {
         model.settings.volume = kVolumeSteps[model.menuIndex];
+      }
+      return;
+    }
+
+    if (model.overlay == OverlayState::PetSelect) {
+      if (model.menuIndex >= 2) {
+        model.overlay = OverlayState::Menu;
+        model.menuIndex = 0;
+      } else {
+        model.settings.useExperimentalPetPack = model.menuIndex == 0;
+        model.overlay = OverlayState::None;
       }
       return;
     }
@@ -620,12 +642,17 @@ void UiRouter::handleButton(const ButtonEvent& event, AppModel& model) {
   if (event.button == ButtonId::B && event.gesture == ButtonGesture::LongPress) {
     if (model.overlay == OverlayState::Brightness) {
       model.overlay = OverlayState::Menu;
-      model.menuIndex = 0;
+      model.menuIndex = 1;
       return;
     }
     if (model.overlay == OverlayState::Volume) {
       model.overlay = OverlayState::Menu;
-      model.menuIndex = 1;
+      model.menuIndex = 2;
+      return;
+    }
+    if (model.overlay == OverlayState::PetSelect) {
+      model.overlay = OverlayState::Menu;
+      model.menuIndex = 0;
       return;
     }
     if (model.overlay != OverlayState::None) {
@@ -671,6 +698,16 @@ void UiRouter::handleButton(const ButtonEvent& event, AppModel& model) {
     return;
   }
 
+  if (model.overlay == OverlayState::PetSelect && event.gesture == ButtonGesture::ShortPress) {
+    constexpr uint8_t kPetMenuCount = 3;
+    if (event.button == ButtonId::A) {
+      model.menuIndex = static_cast<uint8_t>((model.menuIndex + 1U) % kPetMenuCount);
+    } else {
+      model.menuIndex = static_cast<uint8_t>((model.menuIndex + kPetMenuCount - 1U) % kPetMenuCount);
+    }
+    return;
+  }
+
   if (event.gesture != ButtonGesture::ShortPress) {
     return;
   }
@@ -699,6 +736,8 @@ void UiRouter::draw(const AppModel& model, const PetRuntime& petRuntime) const {
     drawBrightnessOverlay(model);
   } else if (model.overlay == OverlayState::Volume) {
     drawVolumeOverlay(model);
+  } else if (model.overlay == OverlayState::PetSelect) {
+    drawPetSelectOverlay(model);
   }
 
   presentFrame();
@@ -726,9 +765,8 @@ void UiRouter::drawBase(const AppModel& model, const PetRuntime& petRuntime) con
 
 void UiRouter::drawPet(const AppModel& model, const PetRuntime& petRuntime) const {
   drawPetHeaderRow(model);
-  drawPetGround();
   drawPetCue(model);
-  petRuntime.draw(3, 34, 4, model.snapshot.petState);
+  petRuntime.draw(19, 50, 2, model.snapshot.petState);
   drawPetFooterCard(statusLights_, model);
 }
 
@@ -831,8 +869,8 @@ void UiRouter::drawMenuOverlay(const AppModel& model) const {
 
   size_t count = 0;
   const MenuEntry* entries = activeMenuEntries(model, count);
-  String labels[7];
-  for (uint8_t i = 0; i < count && i < 7; ++i) {
+  String labels[8];
+  for (uint8_t i = 0; i < count && i < 8; ++i) {
     labels[i] = menuLabelFor(model, entries[i].action, entries[i].label);
   }
   drawMenuList(x + 10, y + 38, w - 20, labels, count, model.menuIndex);
@@ -878,6 +916,25 @@ void UiRouter::drawVolumeOverlay(const AppModel& model) const {
                                    sizeof(kVolumeSteps) / sizeof(kVolumeSteps[0]));
   canvas.setTextColor(0xBDF7, 0x18C3);
   canvas.drawCentreString("Current: " + levelLabel(active), canvas.width() / 2, y + h - 22, 1);
+}
+
+void UiRouter::drawPetSelectOverlay(const AppModel& model) const {
+  auto& canvas = frameBuffer();
+  const int16_t x = 10;
+  const int16_t y = 16;
+  const int16_t w = canvas.width() - 20;
+  const int16_t h = canvas.height() - 32;
+  drawMenuCard("Pet Pack", x, y, w, h);
+
+  String labels[3];
+  labels[0] = "64-frame Pack";
+  labels[1] = "Classic Demo";
+  labels[2] = "Back";
+  drawMenuList(x + 10, y + 38, w - 20, labels, 3, model.menuIndex);
+
+  canvas.setTextColor(0xBDF7, 0x18C3);
+  canvas.drawCentreString(String("Current: ") + (model.settings.useExperimentalPetPack ? "64-frame Pack" : "Classic Demo"),
+                          canvas.width() / 2, y + h - 22, 1);
 }
 
 }  // namespace buddy

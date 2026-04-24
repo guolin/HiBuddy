@@ -2,6 +2,8 @@
 
 #include "board/board_init.h"
 
+#include "../../arduino_pack.h"
+
 namespace buddy {
 
 namespace {
@@ -25,7 +27,7 @@ uint16_t adjustFrameInterval(const PetAnimState state, const PetAnimVariant vari
       break;
     case PetAnimState::Idle:
       if (model.petStats.mood >= 75 && model.petStats.energy >= 60) {
-        interval -= 30;
+        interval -= 10;
       }
       if (model.petStats.mood <= 30 || model.petStats.energy <= 30) {
         interval += 45;
@@ -73,13 +75,34 @@ void PetRuntime::begin() {
   activeState_ = PetAnimState::Idle;
   fallbackState_ = PetAnimState::Idle;
   animationFrame_ = 0;
+  lastBaseFrame_ = 0;
+  lastVariantOffsetX_ = 0;
+  lastVariantOffsetY_ = 0;
   animationDirection_ = 1;
   transientActive_ = false;
   celebrateConsumed_ = false;
+  pendingShakeWhileDizzy_ = false;
   celebrateLoopsRemaining_ = 0;
   lastFrameAt_ = millis();
   holdUntilAt_ = 0;
   resetProceduralState();
+}
+
+void PetRuntime::onShake() {
+  pendingShakeWhileDizzy_ = true;
+  if (activeState_ != PetAnimState::Dizzy) {
+    return;
+  }
+
+  const PetAnimClip& clip = clipFor(PetAnimState::Dizzy);
+  uint8_t nextFrame = lastBaseFrame_;
+  while (nextFrame == lastBaseFrame_) {
+    nextFrame = static_cast<uint8_t>(random(clip.count));
+  }
+  lastBaseFrame_ = nextFrame;
+  lastFrameAt_ = millis();
+  nextPoseChangeAt_ = lastFrameAt_ + static_cast<uint32_t>(random(1600, 2400));
+  pendingShakeWhileDizzy_ = false;
 }
 
 void PetRuntime::tick(const AppModel& model) {
@@ -105,6 +128,10 @@ void PetRuntime::tick(const AppModel& model) {
   }
   if (!transientActive_) {
     baseState_ = activeState_;
+  }
+
+  if (pendingShakeWhileDizzy_ && activeState_ == PetAnimState::Dizzy) {
+    onShake();
   }
 
   const uint32_t now = millis();
@@ -143,24 +170,23 @@ void PetRuntime::tick(const AppModel& model) {
 }
 
 void PetRuntime::draw(int16_t x, int16_t y, uint16_t scale, PetState) const {
-  const DemoFrame& frame = kDemoFrames[currentFrameIndex()];
   auto& canvas = frameBuffer();
+  const uint8_t frameIndex = currentFrameIndex();
+  const uint8_t* frame = static_cast<const uint8_t*>(pgm_read_ptr(&BUDDY_PACK_FRAMES[frameIndex]));
+  const int16_t drawX = x + offsetX_ - static_cast<int16_t>(2 * scale)-4;
+  const int16_t drawY = y + offsetY_;
 
-  for (uint8_t row = 0; row < kPetSpriteSize; ++row) {
-    for (uint8_t col = 0; col < kPetSpriteSize; ++col) {
-      const char key = frame.rows[row][col];
-      if (key == '.') {
+  for (uint16_t row = 0; row < BUDDY_PACK_FRAME_HEIGHT; ++row) {
+    for (uint16_t col = 0; col < BUDDY_PACK_FRAME_WIDTH; ++col) {
+      const uint16_t pixelIndex = row * BUDDY_PACK_FRAME_WIDTH + col;
+      const uint8_t paletteIndex = buddy_pack_palette_index(frame, pixelIndex);
+      if (paletteIndex == BUDDY_PACK_TRANSPARENT_INDEX) {
         continue;
       }
 
-      uint16_t color = TFT_WHITE;
-      for (const auto& entry : kDemoPalette) {
-        if (entry.key == key) {
-          color = entry.color;
-          break;
-        }
-      }
-      canvas.fillRect(x + offsetX_ + col * scale, y + offsetY_ + row * scale, scale, scale, color);
+      const uint16_t color = pgm_read_word(&PALETTE_RGB565[paletteIndex]);
+      canvas.fillRect(drawX + static_cast<int16_t>(col * scale), drawY + static_cast<int16_t>(row * scale), scale,
+                      scale, color);
     }
   }
 }
@@ -169,14 +195,14 @@ PetAnimState PetRuntime::resolveBaseState(const AppModel& model) const {
   if (model.petStats.heartUntilMs > millis()) {
     return PetAnimState::Heart;
   }
+  if (model.motionDizzyUntilMs > millis()) {
+    return PetAnimState::Dizzy;
+  }
   if (model.systemState == SystemState::ScreenSleep || model.snapshot.petState == PetState::Sleep) {
     return PetAnimState::Sleep;
   }
   if (model.faceDownSleepActive || model.petStats.energy <= 18) {
     return PetAnimState::Sleep;
-  }
-  if (model.motionDizzyUntilMs > millis()) {
-    return PetAnimState::Dizzy;
   }
   if (!model.demoMode && model.runtimeState == RuntimeUiState::Degraded && model.petStats.mood <= 32) {
     return PetAnimState::Dizzy;
@@ -217,7 +243,7 @@ void PetRuntime::setState(PetAnimState state, bool transient, PetAnimState fallb
   transientActive_ = transient;
 
   if (preservePhase && previousClip.count > 1 && nextClip.count > 1) {
-    const uint8_t previousFrame = animationFrame_;
+    const uint8_t previousFrame = lastBaseFrame_;
     const uint8_t previousMaxFrame = static_cast<uint8_t>(previousClip.count - 1U);
     const uint8_t nextMaxFrame = static_cast<uint8_t>(nextClip.count - 1U);
     animationFrame_ = previousMaxFrame == 0
@@ -226,6 +252,7 @@ void PetRuntime::setState(PetAnimState state, bool transient, PetAnimState fallb
                                                  previousMaxFrame);
   } else {
     animationFrame_ = 0;
+    lastBaseFrame_ = 0;
     animationDirection_ = 1;
   }
 
@@ -245,53 +272,110 @@ bool PetRuntime::advanceFrame(const PetAnimClip& clip) {
   bool loopCompleted = false;
   holdUntilAt_ = 0;
 
-  switch (clip.loopMode) {
-    case PetLoopMode::Loop:
-      animationFrame_ = static_cast<uint8_t>((animationFrame_ + 1U) % clip.count);
-      loopCompleted = animationFrame_ == 0U;
-      if (animationFrame_ == clip.count - 1U && clip.holdOnLastFrameMs != 0) {
-        holdUntilAt_ = millis() + clip.holdOnLastFrameMs;
-      } else if (animationFrame_ == 0U && clip.randomIdlePause && random(100) < 45) {
-        holdUntilAt_ = millis() + static_cast<uint32_t>(random(70, 180));
-      }
-      break;
+  if (activeVariant_ == PetAnimVariant::Base) {
+    const uint32_t now = millis();
+    if (now < nextPoseChangeAt_) {
+      return false;
+    }
 
-    case PetLoopMode::PingPong:
-      if (animationDirection_ > 0) {
-        if (animationFrame_ + 1U >= clip.count) {
-          animationDirection_ = -1;
-          animationFrame_ = clip.count - 2U;
-          holdUntilAt_ = clip.holdOnLastFrameMs != 0 ? millis() + clip.holdOnLastFrameMs : 0;
-        } else {
+    const uint8_t previousBaseFrame = lastBaseFrame_;
+    uint8_t nextBaseFrame = previousBaseFrame;
+    while (nextBaseFrame == previousBaseFrame) {
+      nextBaseFrame = static_cast<uint8_t>(random(clip.count));
+    }
+    lastBaseFrame_ = nextBaseFrame;
+
+    switch (activeState_) {
+      case PetAnimState::Sleep:
+        nextPoseChangeAt_ = now + static_cast<uint32_t>(random(4200, 6800));
+        break;
+      case PetAnimState::Idle:
+        nextPoseChangeAt_ = now + static_cast<uint32_t>(random(3200, 5200));
+        break;
+      case PetAnimState::Busy:
+        nextPoseChangeAt_ = now + static_cast<uint32_t>(random(2400, 4200));
+        break;
+      case PetAnimState::Attention:
+        nextPoseChangeAt_ = now + static_cast<uint32_t>(random(3600, 5600));
+        break;
+      case PetAnimState::Celebrate:
+        nextPoseChangeAt_ = now + static_cast<uint32_t>(random(1400, 2200));
+        break;
+      case PetAnimState::Dizzy:
+        nextPoseChangeAt_ = now + static_cast<uint32_t>(random(1600, 2400));
+        break;
+      case PetAnimState::Heart:
+        nextPoseChangeAt_ = now + static_cast<uint32_t>(random(1200, 1800));
+        break;
+    }
+
+    switch (clip.loopMode) {
+      case PetLoopMode::Loop:
+      case PetLoopMode::PingPong:
+        animationFrame_ = static_cast<uint8_t>((animationFrame_ + 1U) % clip.count);
+        loopCompleted = animationFrame_ == 0U;
+        break;
+      case PetLoopMode::PlayOnce:
+        if (animationFrame_ + 1U < clip.count) {
           ++animationFrame_;
-        }
-      } else if (animationFrame_ == 0U) {
-        animationDirection_ = 1;
-        animationFrame_ = 1U;
-        holdUntilAt_ = clip.randomIdlePause && random(100) < 40 ? millis() + static_cast<uint32_t>(random(60, 150)) : 0;
-        loopCompleted = true;
-      } else {
-        --animationFrame_;
-        if (animationFrame_ == 0U) {
+          if (animationFrame_ == clip.count - 1U && clip.holdOnLastFrameMs != 0) {
+            holdUntilAt_ = millis() + clip.holdOnLastFrameMs;
+          }
+        } else if (transientActive_) {
+          setState(fallbackState_);
+          loopCompleted = true;
+        } else if (clip.holdOnLastFrameMs != 0) {
+          holdUntilAt_ = millis() + clip.holdOnLastFrameMs;
           loopCompleted = true;
         }
-      }
-      break;
+        break;
+    }
 
-    case PetLoopMode::PlayOnce:
-      if (animationFrame_ + 1U < clip.count) {
-        ++animationFrame_;
-        if (animationFrame_ == clip.count - 1U && clip.holdOnLastFrameMs != 0) {
-          holdUntilAt_ = millis() + clip.holdOnLastFrameMs;
+    if (holdUntilAt_ == 0 && clip.randomIdlePause && random(100) < 42) {
+      holdUntilAt_ = millis() + static_cast<uint32_t>(random(180, 420));
+    }
+  } else {
+    switch (clip.loopMode) {
+      case PetLoopMode::Loop:
+        animationFrame_ = static_cast<uint8_t>((animationFrame_ + 1U) % clip.count);
+        loopCompleted = animationFrame_ == 0U;
+        break;
+      case PetLoopMode::PingPong:
+        if (animationDirection_ > 0) {
+          if (animationFrame_ + 1U >= clip.count) {
+            animationDirection_ = -1;
+            animationFrame_ = clip.count - 2U;
+            holdUntilAt_ = clip.holdOnLastFrameMs != 0 ? millis() + clip.holdOnLastFrameMs : 0;
+          } else {
+            ++animationFrame_;
+          }
+        } else if (animationFrame_ == 0U) {
+          animationDirection_ = 1;
+          animationFrame_ = 1U;
+          holdUntilAt_ = clip.randomIdlePause && random(100) < 40 ? millis() + static_cast<uint32_t>(random(60, 150)) : 0;
+          loopCompleted = true;
+        } else {
+          --animationFrame_;
+          if (animationFrame_ == 0U) {
+            loopCompleted = true;
+          }
         }
-      } else if (transientActive_) {
-        setState(fallbackState_);
-        loopCompleted = true;
-      } else if (clip.holdOnLastFrameMs != 0) {
-        holdUntilAt_ = millis() + clip.holdOnLastFrameMs;
-        loopCompleted = true;
-      }
-      break;
+        break;
+      case PetLoopMode::PlayOnce:
+        if (animationFrame_ + 1U < clip.count) {
+          ++animationFrame_;
+          if (animationFrame_ == clip.count - 1U && clip.holdOnLastFrameMs != 0) {
+            holdUntilAt_ = millis() + clip.holdOnLastFrameMs;
+          }
+        } else if (transientActive_) {
+          setState(fallbackState_);
+          loopCompleted = true;
+        } else if (clip.holdOnLastFrameMs != 0) {
+          holdUntilAt_ = millis() + clip.holdOnLastFrameMs;
+          loopCompleted = true;
+        }
+        break;
+    }
   }
 
   const PetMotionProfile& motion = motionProfileFor(activeState_);
@@ -313,6 +397,8 @@ void PetRuntime::resetProceduralState(bool preserveOffset) {
     offsetY_ = 0;
     offsetTargetX_ = 0;
     offsetTargetY_ = 0;
+    lastVariantOffsetX_ = 0;
+    lastVariantOffsetY_ = 0;
   } else {
     offsetTargetX_ = offsetX_;
     offsetTargetY_ = offsetY_;
@@ -320,6 +406,7 @@ void PetRuntime::resetProceduralState(bool preserveOffset) {
   lastOffsetStepAt_ = now;
   nextMicroMotionAt_ = now;
   nextIdleActionAt_ = now + static_cast<uint32_t>(random(2600, 5200));
+  nextPoseChangeAt_ = now + static_cast<uint32_t>(random(2200, 4200));
 }
 
 void PetRuntime::updateProceduralMotion(const AppModel& model, uint32_t now) {
@@ -397,21 +484,41 @@ void PetRuntime::updateOffsets(const AppModel& model, uint32_t now) {
       case PetAnimVariant::Blink:
         offsetTargetX_ = 0;
         offsetTargetY_ = randomRange(motion.minOffsetY, motion.maxOffsetY);
+        if (offsetTargetX_ == lastVariantOffsetX_ && offsetTargetY_ == lastVariantOffsetY_) {
+          offsetTargetY_ = offsetTargetY_ == 0 ? 1 : 0;
+        }
+        lastVariantOffsetX_ = offsetTargetX_;
+        lastVariantOffsetY_ = offsetTargetY_;
         break;
       case PetAnimVariant::Tilt:
         offsetTargetX_ = random(2) == 0 ? motion.minOffsetX : motion.maxOffsetX;
         offsetTargetY_ = randomRange(motion.minOffsetY, motion.maxOffsetY);
+        if (offsetTargetX_ == lastVariantOffsetX_ && offsetTargetY_ == lastVariantOffsetY_) {
+          offsetTargetX_ = offsetTargetX_ <= 0 ? 1 : -1;
+        }
+        lastVariantOffsetX_ = offsetTargetX_;
+        lastVariantOffsetY_ = offsetTargetY_;
         break;
       case PetAnimVariant::Focus:
         offsetTargetX_ = 0;
         offsetTargetY_ = randomRange(0, motion.maxOffsetY > 1 ? 1 : motion.maxOffsetY);
+        if (offsetTargetX_ == lastVariantOffsetX_ && offsetTargetY_ == lastVariantOffsetY_) {
+          offsetTargetY_ = offsetTargetY_ == 0 ? 1 : 0;
+        }
+        lastVariantOffsetX_ = offsetTargetX_;
+        lastVariantOffsetY_ = offsetTargetY_;
         break;
     }
 
-    if (activeState_ == PetAnimState::Heart) {
-      offsetTargetY_ = -1;
-    } else if (activeState_ == PetAnimState::Celebrate) {
-      offsetTargetY_ = randomRange(0, 2);
+    if (offsetTargetX_ < -1) {
+      offsetTargetX_ = -1;
+    } else if (offsetTargetX_ > 1) {
+      offsetTargetX_ = 1;
+    }
+    if (offsetTargetY_ < 0) {
+      offsetTargetY_ = 0;
+    } else if (offsetTargetY_ > 1) {
+      offsetTargetY_ = 1;
     }
 
     nextMicroMotionAt_ =
@@ -459,29 +566,29 @@ uint8_t PetRuntime::currentFrameIndex() const {
   switch (activeState_) {
     case PetAnimState::Sleep:
       if (activeVariant_ == PetAnimVariant::Blink) {
-        constexpr uint8_t kSleepBlinkFrames[] = {1, 2, 1};
+        constexpr uint8_t kSleepBlinkFrames[] = {1, 3, 2};
         return static_cast<uint8_t>(clip.start + kSleepBlinkFrames[animationFrame_ % 3U]);
       }
       break;
     case PetAnimState::Idle:
       if (activeVariant_ == PetAnimVariant::Blink) {
-        constexpr uint8_t kIdleBlinkFrames[] = {0, 4, 0};
+        constexpr uint8_t kIdleBlinkFrames[] = {0, 4, 7};
         return static_cast<uint8_t>(clip.start + kIdleBlinkFrames[animationFrame_ % 3U]);
       }
       if (activeVariant_ == PetAnimVariant::Tilt) {
-        constexpr uint8_t kIdleTiltFrames[] = {2, 3, 2, 1};
+        constexpr uint8_t kIdleTiltFrames[] = {1, 3, 5, 6};
         return static_cast<uint8_t>(clip.start + kIdleTiltFrames[animationFrame_ % 4U]);
       }
       break;
     case PetAnimState::Busy:
       if (activeVariant_ == PetAnimVariant::Focus) {
-        constexpr uint8_t kBusyFocusFrames[] = {0, 1, 0, 2};
+        constexpr uint8_t kBusyFocusFrames[] = {0, 2, 4, 6};
         return static_cast<uint8_t>(clip.start + kBusyFocusFrames[animationFrame_ % 4U]);
       }
       break;
     case PetAnimState::Attention:
       if (activeVariant_ == PetAnimVariant::Tilt) {
-        constexpr uint8_t kAttentionTiltFrames[] = {0, 1, 2, 1};
+        constexpr uint8_t kAttentionTiltFrames[] = {1, 3, 4, 6};
         return static_cast<uint8_t>(clip.start + kAttentionTiltFrames[animationFrame_ % 4U]);
       }
       break;
@@ -491,7 +598,7 @@ uint8_t PetRuntime::currentFrameIndex() const {
       break;
   }
 
-  return static_cast<uint8_t>(clip.start + animationFrame_);
+  return static_cast<uint8_t>(clip.start + lastBaseFrame_);
 }
 
 }  // namespace buddy

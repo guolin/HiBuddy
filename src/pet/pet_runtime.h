@@ -15,6 +15,7 @@ enum class PetAnimVariant : uint8_t {
 class PetRuntime {
  public:
   void begin();
+  void onShake();
   void tick(const AppModel& model);
   void draw(int16_t x, int16_t y, uint16_t scale, PetState state) const;
 
@@ -26,6 +27,9 @@ class PetRuntime {
   PetAnimVariant pendingVariant_{PetAnimVariant::Base};
   PetAnimVariant lastVariant_{PetAnimVariant::Base};
   uint8_t animationFrame_{0};
+  uint8_t lastBaseFrame_{0};
+  int8_t lastVariantOffsetX_{0};
+  int8_t lastVariantOffsetY_{0};
   int8_t animationDirection_{1};
   int8_t offsetX_{0};
   int8_t offsetY_{0};
@@ -33,10 +37,12 @@ class PetRuntime {
   int8_t offsetTargetY_{0};
   bool transientActive_{false};
   bool celebrateConsumed_{false};
+  bool pendingShakeWhileDizzy_{false};
   uint32_t lastFrameAt_{0};
   uint32_t holdUntilAt_{0};
   uint32_t nextMicroMotionAt_{0};
   uint32_t nextIdleActionAt_{0};
+  uint32_t nextPoseChangeAt_{0};
   uint32_t lastOffsetStepAt_{0};
   uint8_t variantLoopsRemaining_{0};
   uint8_t pendingVariantLoopsRemaining_{0};

@@ -64,6 +64,8 @@ const __FlashStringHelper* toFlashString(OverlayState overlay) {
       return F("Brightness");
     case OverlayState::Volume:
       return F("Volume");
+    case OverlayState::PetSelect:
+      return F("PetSelect");
   }
   return F("Overlay");
 }
