@@ -130,7 +130,7 @@ struct PetStats {
 };
 
 struct DeviceSettings {
-  String deviceId{kDefaultDeviceId};
+  String deviceId{defaultDeviceId()};
   String deviceToken;
   String wifiSsid;
   String wifiPassword;

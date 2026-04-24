@@ -36,6 +36,8 @@ class BuddyApp {
   uint32_t lastPairCodeRequestedAt_{0};
   uint32_t lastDemoStepAt_{0};
   uint8_t demoScenarioIndex_{0};
+  bool pairCodeRequestInFlight_{false};
+  bool bootstrapRequestInFlight_{false};
   bool lastWifiConnected_{false};
   bool displaySleepApplied_{false};
   bool accelValid_{false};

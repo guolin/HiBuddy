@@ -479,13 +479,13 @@ constexpr PetAnimClip kPetAnimClips[] = {
 };
 
 constexpr PetMotionProfile kPetMotionProfiles[] = {
-    {0, 0, 0, 2, 700, 1200, 24, 10, 5},   // sleep
-    {-2, 2, 0, 4, 500, 950, 30, 20, 12},  // idle
-    {-1, 1, 0, 2, 280, 520, 18, 18, 6},   // busy
-    {-1, 1, 0, 2, 240, 420, 22, 10, 4},   // attention
-    {-2, 2, 0, 3, 180, 320, 14, 14, 0},   // celebrate
-    {-2, 2, 0, 2, 120, 240, 8, 8, 0},     // dizzy
-    {-1, 1, -1, 2, 140, 240, 0, 0, 0},    // heart
+    {0, 0, 0, 2, 820, 1380, 12, 10, 5},   // sleep
+    {-1, 1, 0, 3, 720, 1180, 16, 16, 8},  // idle
+    {-1, 1, 0, 1, 420, 700, 6, 14, 4},    // busy
+    {-1, 1, 0, 2, 360, 620, 10, 8, 3},    // attention
+    {-1, 1, 0, 3, 220, 360, 8, 0, 0},     // celebrate
+    {-2, 2, 0, 2, 150, 260, 6, 0, 0},     // dizzy
+    {-1, 1, -1, 1, 180, 280, 0, 0, 0},    // heart
 };
 
 inline const PetAnimClip& clipFor(PetAnimState state) {

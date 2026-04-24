@@ -75,6 +75,8 @@ void PetRuntime::begin() {
   animationFrame_ = 0;
   animationDirection_ = 1;
   transientActive_ = false;
+  celebrateConsumed_ = false;
+  celebrateLoopsRemaining_ = 0;
   lastFrameAt_ = millis();
   holdUntilAt_ = 0;
   resetProceduralState();
@@ -82,13 +84,21 @@ void PetRuntime::begin() {
 
 void PetRuntime::tick(const AppModel& model) {
   const PetAnimState resolvedBaseState = resolveBaseState(model);
+  if (model.snapshot.petState != PetState::Done) {
+    celebrateConsumed_ = false;
+  }
+
   if (transientActive_) {
     if (resolvedBaseState != fallbackState_) {
       fallbackState_ = resolvedBaseState;
     }
   } else if (resolvedBaseState != activeState_) {
     if (resolvedBaseState == PetAnimState::Celebrate) {
-      setState(PetAnimState::Heart, true, PetAnimState::Celebrate);
+      if (!celebrateConsumed_) {
+        celebrateConsumed_ = true;
+        celebrateLoopsRemaining_ = 2;
+        setState(PetAnimState::Heart, true, PetAnimState::Celebrate);
+      }
     } else {
       setState(resolvedBaseState);
     }
@@ -111,11 +121,23 @@ void PetRuntime::tick(const AppModel& model) {
   }
 
   lastFrameAt_ = now;
+  const PetAnimState stateBeforeAdvance = activeState_;
   const bool loopCompleted = advanceFrame(clip);
-  if (loopCompleted && variantLoopsRemaining_ > 0) {
-    --variantLoopsRemaining_;
-    if (variantLoopsRemaining_ == 0) {
-      clearVariant();
+  if (loopCompleted) {
+    if (pendingVariant_ != PetAnimVariant::Base && activeVariant_ == PetAnimVariant::Base) {
+      applyPendingVariant();
+    }
+    if (variantLoopsRemaining_ > 0) {
+      --variantLoopsRemaining_;
+      if (variantLoopsRemaining_ == 0) {
+        clearVariant();
+      }
+    }
+    if (stateBeforeAdvance == PetAnimState::Celebrate && !transientActive_ && celebrateLoopsRemaining_ > 0) {
+      --celebrateLoopsRemaining_;
+      if (celebrateLoopsRemaining_ == 0) {
+        setState(PetAnimState::Idle);
+      }
     }
   }
 }
@@ -183,15 +205,36 @@ PetAnimState PetRuntime::resolveBaseState(const AppModel& model) const {
 }
 
 void PetRuntime::setState(PetAnimState state, bool transient, PetAnimState fallback) {
+  const PetAnimState previousState = activeState_;
+  const PetAnimClip& previousClip = clipFor(previousState);
+  const PetAnimClip& nextClip = clipFor(state);
+  const bool preservePhase = !transient && !transientActive_ && state != PetAnimState::Celebrate &&
+                             state != PetAnimState::Dizzy && state != PetAnimState::Heart;
+
   activeState_ = state;
   baseState_ = transient ? fallback : state;
   fallbackState_ = fallback;
   transientActive_ = transient;
-  animationFrame_ = 0;
-  animationDirection_ = 1;
+
+  if (preservePhase && previousClip.count > 1 && nextClip.count > 1) {
+    const uint8_t previousFrame = animationFrame_;
+    const uint8_t previousMaxFrame = static_cast<uint8_t>(previousClip.count - 1U);
+    const uint8_t nextMaxFrame = static_cast<uint8_t>(nextClip.count - 1U);
+    animationFrame_ = previousMaxFrame == 0
+                          ? 0
+                          : static_cast<uint8_t>((static_cast<uint16_t>(previousFrame) * nextMaxFrame) /
+                                                 previousMaxFrame);
+  } else {
+    animationFrame_ = 0;
+    animationDirection_ = 1;
+  }
+
+  if (!preservePhase) {
+    animationDirection_ = 1;
+  }
   lastFrameAt_ = millis();
   holdUntilAt_ = 0;
-  resetProceduralState();
+  resetProceduralState(preservePhase);
 }
 
 bool PetRuntime::advanceFrame(const PetAnimClip& clip) {
@@ -208,8 +251,8 @@ bool PetRuntime::advanceFrame(const PetAnimClip& clip) {
       loopCompleted = animationFrame_ == 0U;
       if (animationFrame_ == clip.count - 1U && clip.holdOnLastFrameMs != 0) {
         holdUntilAt_ = millis() + clip.holdOnLastFrameMs;
-      } else if (animationFrame_ == 0U && clip.randomIdlePause) {
-        holdUntilAt_ = millis() + static_cast<uint32_t>(random(80, 260));
+      } else if (animationFrame_ == 0U && clip.randomIdlePause && random(100) < 45) {
+        holdUntilAt_ = millis() + static_cast<uint32_t>(random(70, 180));
       }
       break;
 
@@ -225,7 +268,7 @@ bool PetRuntime::advanceFrame(const PetAnimClip& clip) {
       } else if (animationFrame_ == 0U) {
         animationDirection_ = 1;
         animationFrame_ = 1U;
-        holdUntilAt_ = clip.randomIdlePause ? millis() + static_cast<uint32_t>(random(80, 220)) : 0;
+        holdUntilAt_ = clip.randomIdlePause && random(100) < 40 ? millis() + static_cast<uint32_t>(random(60, 150)) : 0;
         loopCompleted = true;
       } else {
         --animationFrame_;
@@ -252,21 +295,31 @@ bool PetRuntime::advanceFrame(const PetAnimClip& clip) {
   }
 
   const PetMotionProfile& motion = motionProfileFor(activeState_);
-  if (holdUntilAt_ == 0 && motion.pauseChancePct > 0 && random(100) < motion.pauseChancePct) {
-    holdUntilAt_ = millis() + static_cast<uint32_t>(random(50, 140));
+  if (holdUntilAt_ == 0 && loopCompleted && motion.pauseChancePct > 0 && random(100) < motion.pauseChancePct) {
+    holdUntilAt_ = millis() + static_cast<uint32_t>(random(45, 110));
   }
 
   return loopCompleted;
 }
 
-void PetRuntime::resetProceduralState() {
+void PetRuntime::resetProceduralState(bool preserveOffset) {
   activeVariant_ = PetAnimVariant::Base;
+  pendingVariant_ = PetAnimVariant::Base;
+  pendingVariantLoopsRemaining_ = 0;
   variantLoopsRemaining_ = 0;
-  offsetX_ = 0;
-  offsetY_ = 0;
   const uint32_t now = millis();
+  if (!preserveOffset) {
+    offsetX_ = 0;
+    offsetY_ = 0;
+    offsetTargetX_ = 0;
+    offsetTargetY_ = 0;
+  } else {
+    offsetTargetX_ = offsetX_;
+    offsetTargetY_ = offsetY_;
+  }
+  lastOffsetStepAt_ = now;
   nextMicroMotionAt_ = now;
-  nextIdleActionAt_ = now + static_cast<uint32_t>(random(2200, 4200));
+  nextIdleActionAt_ = now + static_cast<uint32_t>(random(2600, 5200));
 }
 
 void PetRuntime::updateProceduralMotion(const AppModel& model, uint32_t now) {
@@ -275,38 +328,41 @@ void PetRuntime::updateProceduralMotion(const AppModel& model, uint32_t now) {
 }
 
 void PetRuntime::maybeTriggerVariant(const AppModel& model, uint32_t now) {
-  if (transientActive_ || now < nextIdleActionAt_) {
+  if (transientActive_ || activeVariant_ != PetAnimVariant::Base || pendingVariant_ != PetAnimVariant::Base ||
+      now < nextIdleActionAt_) {
     return;
   }
 
   const PetMotionProfile& motion = motionProfileFor(activeState_);
-  nextIdleActionAt_ = now + static_cast<uint32_t>(random(2600, 6200));
+  nextIdleActionAt_ = now + static_cast<uint32_t>(random(3200, 6800));
   if (random(100) >= motion.variantChancePct) {
     return;
   }
 
+  PetAnimVariant nextVariant = PetAnimVariant::Base;
+  uint8_t nextLoops = 0;
   switch (activeState_) {
     case PetAnimState::Idle:
       if (random(100) < motion.rareActionChancePct) {
-        activeVariant_ = PetAnimVariant::Blink;
+        nextVariant = lastVariant_ == PetAnimVariant::Blink ? PetAnimVariant::Tilt : PetAnimVariant::Blink;
       } else {
-        activeVariant_ = model.petStats.mood >= 65 ? PetAnimVariant::Tilt : PetAnimVariant::Blink;
+        nextVariant = model.petStats.mood >= 65 ? PetAnimVariant::Tilt : PetAnimVariant::Blink;
       }
-      variantLoopsRemaining_ = 1;
+      nextLoops = 1;
       break;
     case PetAnimState::Busy:
-      activeVariant_ = PetAnimVariant::Focus;
-      variantLoopsRemaining_ = 2;
+      nextVariant = PetAnimVariant::Focus;
+      nextLoops = 1;
       break;
     case PetAnimState::Sleep:
       if (random(100) < motion.rareActionChancePct) {
-        activeVariant_ = PetAnimVariant::Blink;
-        variantLoopsRemaining_ = 1;
+        nextVariant = PetAnimVariant::Blink;
+        nextLoops = 1;
       }
       break;
     case PetAnimState::Attention:
-      activeVariant_ = PetAnimVariant::Tilt;
-      variantLoopsRemaining_ = 1;
+      nextVariant = PetAnimVariant::Tilt;
+      nextLoops = 1;
       break;
     case PetAnimState::Celebrate:
     case PetAnimState::Dizzy:
@@ -314,62 +370,86 @@ void PetRuntime::maybeTriggerVariant(const AppModel& model, uint32_t now) {
       break;
   }
 
-  if (variantLoopsRemaining_ > 0) {
-    animationFrame_ = 0;
-    animationDirection_ = 1;
-    holdUntilAt_ = 0;
-  }
+  pendingVariant_ = nextVariant;
+  pendingVariantLoopsRemaining_ = nextLoops;
 }
 
 void PetRuntime::updateOffsets(const AppModel& model, uint32_t now) {
-  if (now < nextMicroMotionAt_) {
+  if (now >= nextMicroMotionAt_) {
+    PetMotionProfile motion = motionProfileFor(activeState_);
+    if (model.petStats.energy <= 30) {
+      motion.maxOffsetY = static_cast<int8_t>(motion.maxOffsetY > 1 ? motion.maxOffsetY - 1 : motion.maxOffsetY);
+    }
+    if (activeState_ == PetAnimState::Busy && model.petStats.focus >= 75) {
+      motion.minOffsetX = 0;
+      motion.maxOffsetX = 0;
+      motion.maxOffsetY = static_cast<int8_t>(motion.maxOffsetY > 1 ? motion.maxOffsetY - 1 : motion.maxOffsetY);
+    }
+    if (activeState_ == PetAnimState::Idle && model.petStats.mood >= 75 && model.petStats.energy >= 60) {
+      motion.maxOffsetY = static_cast<int8_t>(motion.maxOffsetY < 4 ? motion.maxOffsetY + 1 : motion.maxOffsetY);
+    }
+
+    switch (activeVariant_) {
+      case PetAnimVariant::Base:
+        offsetTargetX_ = randomRange(motion.minOffsetX, motion.maxOffsetX);
+        offsetTargetY_ = randomRange(motion.minOffsetY, motion.maxOffsetY);
+        break;
+      case PetAnimVariant::Blink:
+        offsetTargetX_ = 0;
+        offsetTargetY_ = randomRange(motion.minOffsetY, motion.maxOffsetY);
+        break;
+      case PetAnimVariant::Tilt:
+        offsetTargetX_ = random(2) == 0 ? motion.minOffsetX : motion.maxOffsetX;
+        offsetTargetY_ = randomRange(motion.minOffsetY, motion.maxOffsetY);
+        break;
+      case PetAnimVariant::Focus:
+        offsetTargetX_ = 0;
+        offsetTargetY_ = randomRange(0, motion.maxOffsetY > 1 ? 1 : motion.maxOffsetY);
+        break;
+    }
+
+    if (activeState_ == PetAnimState::Heart) {
+      offsetTargetY_ = -1;
+    } else if (activeState_ == PetAnimState::Celebrate) {
+      offsetTargetY_ = randomRange(0, 2);
+    }
+
+    nextMicroMotionAt_ =
+        now + static_cast<uint32_t>(random(motion.minMotionIntervalMs, motion.maxMotionIntervalMs + 1));
+  }
+
+  if (now - lastOffsetStepAt_ < 90) {
     return;
   }
+  lastOffsetStepAt_ = now;
 
-  PetMotionProfile motion = motionProfileFor(activeState_);
-  if (model.petStats.energy <= 30) {
-    motion.maxOffsetY = static_cast<int8_t>(motion.maxOffsetY > 1 ? motion.maxOffsetY - 1 : motion.maxOffsetY);
+  if (offsetX_ < offsetTargetX_) {
+    ++offsetX_;
+  } else if (offsetX_ > offsetTargetX_) {
+    --offsetX_;
   }
-  if (activeState_ == PetAnimState::Busy && model.petStats.focus >= 75) {
-    motion.minOffsetX = -1;
-    motion.maxOffsetX = 1;
-    motion.maxOffsetY = static_cast<int8_t>(motion.maxOffsetY > 1 ? motion.maxOffsetY - 1 : motion.maxOffsetY);
+  if (offsetY_ < offsetTargetY_) {
+    ++offsetY_;
+  } else if (offsetY_ > offsetTargetY_) {
+    --offsetY_;
   }
-  if (activeState_ == PetAnimState::Idle && model.petStats.mood >= 75 && model.petStats.energy >= 60) {
-    motion.maxOffsetY = static_cast<int8_t>(motion.maxOffsetY < 5 ? motion.maxOffsetY + 1 : motion.maxOffsetY);
-  }
+}
 
-  switch (activeVariant_) {
-    case PetAnimVariant::Base:
-      offsetX_ = randomRange(motion.minOffsetX, motion.maxOffsetX);
-      offsetY_ = randomRange(motion.minOffsetY, motion.maxOffsetY);
-      break;
-    case PetAnimVariant::Blink:
-      offsetX_ = 0;
-      offsetY_ = randomRange(motion.minOffsetY, motion.maxOffsetY);
-      break;
-    case PetAnimVariant::Tilt:
-      offsetX_ = random(2) == 0 ? motion.minOffsetX : motion.maxOffsetX;
-      offsetY_ = randomRange(motion.minOffsetY, motion.maxOffsetY);
-      break;
-    case PetAnimVariant::Focus:
-      offsetX_ = 0;
-      offsetY_ = randomRange(0, motion.maxOffsetY > 1 ? 1 : motion.maxOffsetY);
-      break;
+void PetRuntime::applyPendingVariant() {
+  if (pendingVariant_ == PetAnimVariant::Base || pendingVariantLoopsRemaining_ == 0) {
+    return;
   }
-
-  if (activeState_ == PetAnimState::Heart) {
-    offsetY_ = -1;
-  } else if (activeState_ == PetAnimState::Celebrate) {
-    offsetY_ = randomRange(0, 3);
-  }
-
-  nextMicroMotionAt_ =
-      now + static_cast<uint32_t>(random(motion.minMotionIntervalMs, motion.maxMotionIntervalMs + 1));
+  activeVariant_ = pendingVariant_;
+  variantLoopsRemaining_ = pendingVariantLoopsRemaining_;
+  lastVariant_ = activeVariant_;
+  pendingVariant_ = PetAnimVariant::Base;
+  pendingVariantLoopsRemaining_ = 0;
 }
 
 void PetRuntime::clearVariant() {
   activeVariant_ = PetAnimVariant::Base;
+  pendingVariant_ = PetAnimVariant::Base;
+  pendingVariantLoopsRemaining_ = 0;
   variantLoopsRemaining_ = 0;
 }
 

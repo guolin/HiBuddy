@@ -102,11 +102,11 @@ String petHeadline(const AppModel& model) {
   if (model.motionDizzyUntilMs > millis()) {
     return "Dizzy";
   }
-  if (model.snapshot.petState == PetState::Idle) {
+  if (model.snapshot.petState == PetState::Idle || model.snapshot.petState == PetState::Offline) {
     return "";
   }
   if (!model.demoMode && model.wifiState != WifiUiState::Ready) {
-    return "Offline";
+    return "";
   }
   if (!model.demoMode && model.pairState != PairUiState::Ready) {
     return "Unpaired";
@@ -136,7 +136,7 @@ String overviewOnlineLabel(const AppModel& model) {
     return "Online";
   }
   const bool online = model.wifiState == WifiUiState::Ready && model.pairState == PairUiState::Ready &&
-                      model.network.mqttConnected && isSnapshotFresh(model);
+                      model.network.mqttConnected;
   return online ? "Online" : "Offline";
 }
 
@@ -281,6 +281,213 @@ void drawStatBar(const String& label, uint8_t value, int16_t y, uint16_t accent)
   canvas.drawRightString(statLabel(value), canvas.width() - 16, y, 2);
   canvas.drawRoundRect(kBarX, y + 20, kBarW, kBarH, 6, 0x5AEB);
   canvas.fillRoundRect(kBarX + 2, y + 22, ((kBarW - 4) * value) / 100, kBarH - 4, 5, accent);
+}
+
+uint16_t overviewOnlineColor(const AppModel& model) {
+  return overviewOnlineLabel(model) == "Online" ? 0x07E0 : 0xFD20;
+}
+
+String primaryPetStatusText(const AppModel& model) {
+  if (model.snapshot.requiresUser) {
+    return "Waiting";
+  }
+  if (model.motionDizzyUntilMs > millis() || model.snapshot.petState == PetState::Error) {
+    return "Dizzy";
+  }
+  if (model.petStats.heartUntilMs > millis() || model.snapshot.petState == PetState::Done) {
+    return "Happy";
+  }
+  if (model.snapshot.petState == PetState::Thinking || model.snapshot.petState == PetState::Busy) {
+    return "Focus";
+  }
+  if (model.snapshot.petState == PetState::Sleep || model.faceDownSleepActive || model.petStats.energy <= 25) {
+    return "Resting";
+  }
+  if (model.snapshot.petState == PetState::Offline) {
+    return "Quiet";
+  }
+  if (model.petStats.mood >= 70) {
+    return "Calm";
+  }
+  return "Calm";
+}
+
+enum class PetCueState : uint8_t {
+  None,
+  Heart,
+  Sleep,
+  Dizzy,
+  Waiting,
+  Busy,
+};
+
+PetCueState resolvePetCueState(const AppModel& model) {
+  if (model.petStats.heartUntilMs > millis() || model.snapshot.petState == PetState::Done) {
+    return PetCueState::Heart;
+  }
+  if (model.systemState == SystemState::ScreenSleep || model.snapshot.petState == PetState::Sleep ||
+      model.faceDownSleepActive || model.petStats.energy <= 18) {
+    return PetCueState::Sleep;
+  }
+  if (model.motionDizzyUntilMs > millis() ||
+      (!model.demoMode && model.runtimeState == RuntimeUiState::Degraded && model.petStats.mood <= 32) ||
+      model.snapshot.petState == PetState::Error) {
+    return PetCueState::Dizzy;
+  }
+  if (model.snapshot.requiresUser || model.snapshot.petState == PetState::Waiting) {
+    return PetCueState::Waiting;
+  }
+  if ((model.snapshot.petState == PetState::Thinking || model.snapshot.petState == PetState::Busy) &&
+      model.petStats.focus >= 45) {
+    return PetCueState::Busy;
+  }
+  return PetCueState::None;
+}
+
+void drawHeartGlyph(int16_t x, int16_t y, uint16_t color) {
+  auto& canvas = frameBuffer();
+  canvas.fillCircle(x - 2, y, 2, color);
+  canvas.fillCircle(x + 2, y, 2, color);
+  canvas.fillTriangle(x - 5, y + 1, x + 5, y + 1, x, y + 8, color);
+}
+
+void drawDiamondGlyph(int16_t x, int16_t y, uint16_t color) {
+  auto& canvas = frameBuffer();
+  canvas.fillTriangle(x, y - 4, x + 4, y, x, y + 4, color);
+  canvas.fillTriangle(x, y - 4, x - 4, y, x, y + 4, color);
+}
+
+void drawPetGround() {
+  auto& canvas = frameBuffer();
+  canvas.fillRoundRect(32, 154, 72, 10, 5, 0x2104);
+  canvas.fillRoundRect(40, 158, 56, 6, 3, 0x18C3);
+  canvas.drawRoundRect(40, 158, 56, 6, 3, 0x5AEB);
+}
+
+void drawPetCue(const AppModel& model) {
+  auto& canvas = frameBuffer();
+  switch (resolvePetCueState(model)) {
+    case PetCueState::Heart:
+      drawHeartGlyph(48, 146, 0xFFE0);
+      drawHeartGlyph(88, 150, 0xFFE0);
+      break;
+    case PetCueState::Sleep:
+      canvas.fillCircle(92, 140, 2, 0x8C71);
+      canvas.fillCircle(98, 132, 2, 0xBDF7);
+      canvas.fillCircle(104, 124, 1, 0xBDF7);
+      break;
+    case PetCueState::Dizzy:
+      drawDiamondGlyph(34, 144, 0xFD20);
+      drawDiamondGlyph(100, 150, 0xFD20);
+      break;
+    case PetCueState::Waiting:
+      canvas.fillCircle(42, 150, 2, 0xFFE0);
+      canvas.fillCircle(52, 146, 2, 0xFFE0);
+      canvas.fillCircle(94, 148, 2, 0xFFE0);
+      break;
+    case PetCueState::Busy:
+      canvas.fillRoundRect(28, 148, 10, 2, 1, 0x2D7F);
+      canvas.fillRoundRect(33, 154, 8, 2, 1, 0x5AEB);
+      canvas.fillRoundRect(95, 146, 10, 2, 1, 0x2D7F);
+      canvas.fillRoundRect(92, 152, 8, 2, 1, 0x5AEB);
+      break;
+    case PetCueState::None:
+      break;
+  }
+}
+
+void drawPetFooterCard(const StatusLights& statusLights, const AppModel& model) {
+  auto& canvas = frameBuffer();
+  constexpr int16_t kCardX = 8;
+  constexpr int16_t kCardY = 178;
+  constexpr int16_t kCardW = 119;
+  constexpr int16_t kCardH = 54;
+  constexpr uint16_t kCardBg = 0x18C3;
+  constexpr uint16_t kCardBorder = 0x5AEB;
+  constexpr uint16_t kLightSize = 10;
+  constexpr uint16_t kLightGap = 6;
+  constexpr int16_t kLightsY = 216;
+  const String headline = petHeadline(model);
+  const bool hasHeadline = !headline.isEmpty();
+  const bool needsAttention = model.snapshot.requiresUser;
+  const int16_t lightsTotalWidth = static_cast<int16_t>(kSessionLightCount * kLightSize +
+                                                        (kSessionLightCount - 1U) * kLightGap);
+  const int16_t lightsX = (canvas.width() - lightsTotalWidth) / 2;
+
+  canvas.fillRoundRect(kCardX, kCardY, kCardW, kCardH, 12, kCardBg);
+  canvas.drawRoundRect(kCardX, kCardY, kCardW, kCardH, 12, kCardBorder);
+
+  if (hasHeadline) {
+    canvas.setTextColor(0xFFE0, kCardBg);
+    canvas.drawCentreString(headline, canvas.width() / 2, needsAttention ? 186 : 190, 2);
+  } else if (!needsAttention) {
+    canvas.drawLine(48, 196, canvas.width() - 48, 196, 0x4208);
+  }
+
+  if (needsAttention) {
+    canvas.setTextColor(0xC618, kCardBg);
+    canvas.drawCentreString("Needs your attention", canvas.width() / 2, hasHeadline ? 202 : 196, 1);
+  }
+
+  statusLights.draw(model.snapshot, lightsX, kLightsY, kLightSize, kLightGap);
+}
+
+void drawPetHeaderRow(const AppModel& model) {
+  auto& canvas = frameBuffer();
+  const String petName = fitText(model.petName, 12);
+  const String online = overviewOnlineLabel(model);
+  canvas.setTextColor(0xBDF7, TFT_BLACK);
+  canvas.drawString(petName, 8, 8, 2);
+  canvas.setTextColor(overviewOnlineColor(model), TFT_BLACK);
+  canvas.drawRightString(online, canvas.width() - 8, 8, 2);
+}
+
+void drawOverviewHeaderCard(const AppModel& model, const PetRuntime& petRuntime) {
+  auto& canvas = frameBuffer();
+  constexpr int16_t kCardX = 8;
+  constexpr int16_t kCardY = 8;
+  constexpr int16_t kCardW = 119;
+  constexpr int16_t kCardH = 72;
+  constexpr uint16_t kCardBg = 0x18C3;
+  constexpr int16_t kTextX = kCardX + 72;
+  constexpr int16_t kStatusDotX = kCardX + kCardW - 12;
+  const String status = fitText(primaryPetStatusText(model), 8);
+  const bool needsAction = model.snapshot.requiresUser;
+
+  canvas.fillRoundRect(kCardX, kCardY, kCardW, kCardH, 12, kCardBg);
+  canvas.drawRoundRect(kCardX, kCardY, kCardW, kCardH, 12, 0x5AEB);
+  petRuntime.draw(kCardX + 4, kCardY + 4, 2, model.snapshot.petState);
+
+  canvas.fillCircle(kStatusDotX, kCardY + 12, 3, overviewOnlineColor(model));
+  if (needsAction) {
+    canvas.drawCircle(kStatusDotX - 8, kCardY + 12, 3, 0xFFE0);
+  }
+
+  canvas.setTextColor(0xFFE0, kCardBg);
+  canvas.drawString(fitText(model.petName, 8), kTextX, kCardY + 20, 2);
+
+  canvas.setTextColor(TFT_WHITE, kCardBg);
+  canvas.drawString(status, kTextX, kCardY + 44, 2);
+}
+
+void drawOverviewFooterMeta(const AppModel& model) {
+  if (model.snapshot.requiresUser) {
+    drawLabelValue("Action", "Needs you", 224, 1);
+    return;
+  }
+  if (model.demoMode) {
+    drawLabelValue("Status", "Demo mode", 224, 1);
+    return;
+  }
+  if (model.wifiState != WifiUiState::Ready) {
+    drawLabelValue("Status", "Connect Wi-Fi", 224, 1);
+    return;
+  }
+  if (model.pairState != PairUiState::Ready) {
+    drawLabelValue("Status", "Pair device", 224, 1);
+    return;
+  }
+  drawLabelValue("Updated", snapshotAgeLabel(model.network.lastSnapshotMs), 224, 1);
 }
 
 void drawMenuCard(const String& title, int16_t x, int16_t y, int16_t w, int16_t h) {
@@ -518,22 +725,19 @@ void UiRouter::drawBase(const AppModel& model, const PetRuntime& petRuntime) con
 }
 
 void UiRouter::drawPet(const AppModel& model, const PetRuntime& petRuntime) const {
-  petRuntime.draw(4, 8, 4, model.snapshot.petState);
-  const String headline = petHeadline(model);
-  if (!headline.isEmpty()) {
-    drawCenteredCopy(headline, 180, 0xFFE0, 4);
-  }
-  statusLights_.draw(model.snapshot, 27, 210, 16, 8);
+  drawPetHeaderRow(model);
+  drawPetGround();
+  drawPetCue(model);
+  petRuntime.draw(3, 34, 4, model.snapshot.petState);
+  drawPetFooterCard(statusLights_, model);
 }
 
 void UiRouter::drawOverview(const AppModel& model, const PetRuntime& petRuntime) const {
-  (void)petRuntime;
-  drawCenteredCopy(overviewHeadline(model), 12, 0xFFE0, 2);
-  drawStatBar("Mood", model.petStats.mood, 42, 0xFCAA);
-  drawStatBar("Energy", model.petStats.energy, 98, 0xA7E0);
-  drawStatBar("Focus", model.petStats.focus, 154, 0x8D7F);
-  drawCenteredCopy(overviewOnlineLabel(model), 208, overviewOnlineLabel(model) == "Online" ? 0x07E0 : 0xFD20, 2);
-  drawCenteredCopy(requiresUserLine(model), 224, 0xC618, 1);
+  drawOverviewHeaderCard(model, petRuntime);
+  drawStatBar("Mood", model.petStats.mood, 98, 0xFCAA);
+  drawStatBar("Energy", model.petStats.energy, 136, 0xA7E0);
+  drawStatBar("Focus", model.petStats.focus, 174, 0x8D7F);
+  drawOverviewFooterMeta(model);
 }
 
 void UiRouter::drawInfo(const AppModel& model) const {
@@ -571,7 +775,26 @@ void UiRouter::drawWifiGuide(const AppModel& model) const {
   drawLabelValue("Saved", model.settings.wifiSsid.isEmpty() ? "No" : fitText(model.settings.wifiSsid, 18), 82);
   drawLabelValue("State",
                  String(reinterpret_cast<const __FlashStringHelper*>(toFlashString(model.wifiState))), 102);
-  drawCenteredCopy(fitText(model.network.portalStatus, 22), 144, TFT_WHITE, 2);
+
+  const String portalStatus = model.network.portalStatus;
+  if (portalStatus.length() > 22) {
+    int splitAt = -1;
+    for (int i = min<int>(static_cast<int>(portalStatus.length()) - 1, 18); i >= 10; --i) {
+      if (portalStatus.charAt(i) == ' ') {
+        splitAt = i;
+        break;
+      }
+    }
+    if (splitAt > 0) {
+      drawCenteredCopy(fitText(portalStatus.substring(0, splitAt), 22), 136, TFT_WHITE, 2);
+      drawCenteredCopy(fitText(portalStatus.substring(splitAt + 1), 22), 156, TFT_WHITE, 2);
+    } else {
+      drawCenteredCopy(fitText(portalStatus, 22), 144, TFT_WHITE, 2);
+    }
+  } else {
+    drawCenteredCopy(portalStatus, 144, TFT_WHITE, 2);
+  }
+
   drawCenteredCopy("A hold menu", 198, 0xC618, 2);
   drawCenteredCopy("B hold back", 216, 0xC618, 2);
 }

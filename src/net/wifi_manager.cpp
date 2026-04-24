@@ -6,6 +6,53 @@
 
 namespace buddy {
 
+namespace {
+
+String decodeFormField(const String& value) {
+  String decoded;
+  decoded.reserve(value.length());
+
+  for (size_t i = 0; i < value.length(); ++i) {
+    const char ch = value.charAt(i);
+    if (ch == '+') {
+      decoded += ' ';
+      continue;
+    }
+    if (ch == '%' && i + 2 < value.length()) {
+      const char hi = value.charAt(i + 1);
+      const char lo = value.charAt(i + 2);
+      auto hexValue = [](const char c) -> int8_t {
+        if (c >= '0' && c <= '9') {
+          return static_cast<int8_t>(c - '0');
+        }
+        if (c >= 'a' && c <= 'f') {
+          return static_cast<int8_t>(c - 'a' + 10);
+        }
+        if (c >= 'A' && c <= 'F') {
+          return static_cast<int8_t>(c - 'A' + 10);
+        }
+        return -1;
+      };
+      const int8_t hiValue = hexValue(hi);
+      const int8_t loValue = hexValue(lo);
+      if (hiValue >= 0 && loValue >= 0) {
+        decoded += static_cast<char>((hiValue << 4) | loValue);
+        i += 2;
+        continue;
+      }
+    }
+    decoded += ch;
+  }
+
+  return decoded;
+}
+
+bool looksEncodedCredential(const String& raw, const String& decoded) {
+  return raw != decoded && (raw.indexOf('+') >= 0 || raw.indexOf('%') >= 0);
+}
+
+}  // namespace
+
 void WifiManager::begin(const DeviceSettings& settings) {
   WiFi.setAutoReconnect(false);
   if (!settings.wifiSsid.isEmpty()) {
@@ -30,9 +77,21 @@ void WifiManager::tick(NetworkState& network, DeviceSettings& settings) {
 
   if (stationConnectRequested_ && WiFi.status() != WL_CONNECTED &&
       millis() - connectStartedAt_ > kPortalRetryIntervalMs) {
+    if (!decodedRetryAttempted_ && !decodedPendingSsid_.isEmpty() &&
+        (pendingSsid_ != decodedPendingSsid_ || pendingPassword_ != decodedPendingPassword_)) {
+      decodedRetryAttempted_ = true;
+      useDecodedCredentials_ = true;
+      stationConnectRequested_ = false;
+      Serial.printf("[buddy][wifi] retry decoded credentials raw_ssid=%s decoded_ssid=%s\n", pendingSsid_.c_str(),
+                    decodedPendingSsid_.c_str());
+      beginStationConnect(network);
+      return;
+    }
+
     stationConnectRequested_ = false;
     network.portalStatus = String("Connect failed: ") + statusLabel(WiFi.status());
-    Serial.printf("[buddy][wifi] connect timeout ssid=%s status=%s\n", pendingSsid_.c_str(),
+    Serial.printf("[buddy][wifi] connect timeout ssid=%s decoded_ssid=%s using_decoded=%d status=%s\n",
+                  pendingSsid_.c_str(), decodedPendingSsid_.c_str(), static_cast<int>(useDecodedCredentials_),
                   statusLabel(WiFi.status()));
   }
 
@@ -41,11 +100,13 @@ void WifiManager::tick(NetworkState& network, DeviceSettings& settings) {
   network.wifiConfigured = !settings.wifiSsid.isEmpty() || network.portalHasCredentials;
 
   if (network.wifiConnected && network.portalHasCredentials && !credentialsApplied_) {
-    settings.wifiSsid = pendingSsid_;
-    settings.wifiPassword = pendingPassword_;
+    settings.wifiSsid = useDecodedCredentials_ ? decodedPendingSsid_ : pendingSsid_;
+    settings.wifiPassword = useDecodedCredentials_ ? decodedPendingPassword_ : pendingPassword_;
     network.portalStatus = "Connected. Finishing setup";
-    Serial.printf("[buddy][wifi] connected ssid=%s ip=%s rssi=%ld\n", settings.wifiSsid.c_str(),
-                  WiFi.localIP().toString().c_str(), static_cast<long>(WiFi.RSSI()));
+    Serial.printf("[buddy][wifi] connected ssid=%s raw_ssid=%s decoded_ssid=%s using_decoded=%d ip=%s rssi=%ld\n",
+                  settings.wifiSsid.c_str(), pendingSsid_.c_str(), decodedPendingSsid_.c_str(),
+                  static_cast<int>(useDecodedCredentials_), WiFi.localIP().toString().c_str(),
+                  static_cast<long>(WiFi.RSSI()));
     credentialsApplied_ = true;
   }
 }
@@ -60,8 +121,12 @@ void WifiManager::startPortal(NetworkState& network) {
   network.portalStatus = "Connect to AP and open 192.168.4.1";
   pendingSsid_ = "";
   pendingPassword_ = "";
+  decodedPendingSsid_ = "";
+  decodedPendingPassword_ = "";
   stationConnectRequested_ = false;
   credentialsApplied_ = false;
+  useDecodedCredentials_ = false;
+  decodedRetryAttempted_ = false;
   lastLoggedStatus_ = WL_IDLE_STATUS;
   Serial.printf("[buddy][wifi] portal started ap=%s ip=%s open=true\n", network.portalSsid.c_str(),
                 WiFi.softAPIP().toString().c_str());
@@ -112,10 +177,17 @@ void WifiManager::ensurePortalServer() {
   portalServer_.on("/save", HTTP_POST, [this]() {
     pendingSsid_ = portalServer_.arg("ssid");
     pendingPassword_ = portalServer_.arg("password");
+    decodedPendingSsid_ = decodeFormField(pendingSsid_);
+    decodedPendingPassword_ = decodeFormField(pendingPassword_);
+    useDecodedCredentials_ = looksEncodedCredential(pendingSsid_, decodedPendingSsid_) ||
+                             looksEncodedCredential(pendingPassword_, decodedPendingPassword_);
+    decodedRetryAttempted_ = false;
     stationConnectRequested_ = false;
     credentialsApplied_ = false;
-    Serial.printf("[buddy][wifi] credentials received ssid=%s password_len=%u\n", pendingSsid_.c_str(),
-                  static_cast<unsigned>(pendingPassword_.length()));
+    Serial.printf(
+        "[buddy][wifi] credentials received raw_ssid=%s decoded_ssid=%s raw_pass_len=%u decoded_pass_len=%u use_decoded=%d\n",
+        pendingSsid_.c_str(), decodedPendingSsid_.c_str(), static_cast<unsigned>(pendingPassword_.length()),
+        static_cast<unsigned>(decodedPendingPassword_.length()), static_cast<int>(useDecodedCredentials_));
 
     String html;
     html.reserve(600);
@@ -137,7 +209,9 @@ void WifiManager::ensurePortalServer() {
 }
 
 void WifiManager::beginStationConnect(NetworkState& network) {
-  if (pendingSsid_.isEmpty()) {
+  const String& ssid = useDecodedCredentials_ ? decodedPendingSsid_ : pendingSsid_;
+  const String& password = useDecodedCredentials_ ? decodedPendingPassword_ : pendingPassword_;
+  if (ssid.isEmpty()) {
     return;
   }
 
@@ -151,12 +225,13 @@ void WifiManager::beginStationConnect(NetworkState& network) {
   WiFi.disconnect(true, true);
   delay(100);
   WiFi.mode(WIFI_STA);
-  WiFi.begin(pendingSsid_.c_str(), pendingPassword_.c_str());
+  WiFi.begin(ssid.c_str(), password.c_str());
   connectStartedAt_ = millis();
   stationConnectRequested_ = true;
   network.portalHasCredentials = true;
   network.portalStatus = "Saved. Connecting...";
-  Serial.printf("[buddy][wifi] begin connect ssid=%s\n", pendingSsid_.c_str());
+  Serial.printf("[buddy][wifi] begin connect ssid=%s raw_ssid=%s decoded_ssid=%s using_decoded=%d\n", ssid.c_str(),
+                pendingSsid_.c_str(), decodedPendingSsid_.c_str(), static_cast<int>(useDecodedCredentials_));
 }
 
 const char* WifiManager::statusLabel(wl_status_t status) const {

@@ -20,8 +20,12 @@ class WifiManager {
   bool portalServerStarted_{false};
   bool stationConnectRequested_{false};
   bool credentialsApplied_{false};
+  bool useDecodedCredentials_{false};
+  bool decodedRetryAttempted_{false};
   String pendingSsid_;
   String pendingPassword_;
+  String decodedPendingSsid_;
+  String decodedPendingPassword_;
   wl_status_t lastLoggedStatus_{WL_IDLE_STATUS};
 
   void ensurePortalServer();

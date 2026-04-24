@@ -3,14 +3,19 @@
 #include <Arduino.h>
 
 #ifndef BUDDY_API_BASE_URL
-#define BUDDY_API_BASE_URL "https://example.supabase.co/functions/v1"
+#define BUDDY_API_BASE_URL "https://hgktrupgorgseylgekzw.supabase.co/functions/v1"
 #endif
 
 namespace buddy {
 
 constexpr const char* kFirmwareVersion = "0.1.0";
 constexpr const char* kApiBaseUrl = BUDDY_API_BASE_URL;
-constexpr const char* kDefaultDeviceId = "buddy-demo";
+inline String defaultDeviceId() {
+  const uint64_t mac = ESP.getEfuseMac() & 0xFFFFFFFFFFFFULL;
+  char buffer[13];
+  snprintf(buffer, sizeof(buffer), "%012llX", mac);
+  return String(buffer);
+}
 constexpr const char* kDefaultPetName = "Buddy";
 constexpr const char* kDefaultAssetVersion = "demo-1.0.0";
 constexpr const char* kDefaultManifestPath = "/pet-pack/demo/manifest.json";

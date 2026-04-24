@@ -44,21 +44,31 @@ void BuddyApp::applyBootstrapToNetwork(const BootstrapPayload& bootstrap) {
 }
 
 void BuddyApp::requestPairCode(bool refreshing) {
-  if (refreshing) {
-    model_.pairing.statusLabel = "Refreshing";
+  if (pairCodeRequestInFlight_) {
+    return;
   }
 
-  model_.pairing = apiClient_.requestPairCode(model_.settings);
+  if (refreshing) {
+    model_.pairing.statusLabel = "Refreshing";
+  } else {
+    model_.pairing.statusLabel = "Requesting";
+  }
+  model_.pairing.errorDetail = "";
   model_.pairing.paired = false;
   model_.pairConfirmPending = false;
   model_.guidePinned = false;
-  settingsStore_.save(model_.settings);
-  lastPairCodeRequestedAt_ = millis();
-  lastPairBootstrapPollAt_ = lastPairCodeRequestedAt_;
   model_.guide = GuideScreen::PairSetup;
   model_.userDismissedGuide = false;
-  Serial.printf("[buddy][pair] pairCode=%s pairUrl=%s token_len=%u\n", model_.pairing.pairCode.c_str(),
-                model_.pairing.pairUrl.c_str(), static_cast<unsigned>(model_.settings.deviceToken.length()));
+
+  const PairingState queued = apiClient_.requestPairCode(model_.settings);
+  if (queued.statusLabel == "Request failed") {
+    model_.pairing = queued;
+    pairCodeRequestInFlight_ = false;
+    return;
+  }
+
+  pairCodeRequestInFlight_ = true;
+  Serial.println("[buddy][pair] pair-code request queued");
 }
 
 void BuddyApp::begin() {
@@ -99,6 +109,57 @@ void BuddyApp::tick() {
   processButton();
   wifiManager_.tick(model_.network, model_.settings);
   processMotion();
+
+  if (pairCodeRequestInFlight_) {
+    PairingState completedPairing;
+    if (apiClient_.consumePairCodeResult(model_.settings, completedPairing)) {
+      pairCodeRequestInFlight_ = false;
+      model_.pairing = completedPairing;
+      model_.pairing.paired = false;
+      settingsStore_.save(model_.settings);
+      lastPairCodeRequestedAt_ = millis();
+      lastPairBootstrapPollAt_ = lastPairCodeRequestedAt_;
+      Serial.printf("[buddy][pair] pairCode=%s pairUrl=%s token_len=%u\n", model_.pairing.pairCode.c_str(),
+                    model_.pairing.pairUrl.c_str(), static_cast<unsigned>(model_.settings.deviceToken.length()));
+    }
+  }
+
+  if (bootstrapRequestInFlight_) {
+    BootstrapPayload bootstrap;
+    if (apiClient_.consumeBootstrapResult(bootstrap)) {
+      bootstrapRequestInFlight_ = false;
+      if (!bootstrap.ok) {
+        model_.pairing.statusLabel = "Bootstrap failed";
+        model_.pairing.errorDetail = bootstrap.error;
+      } else if (!bootstrap.paired) {
+        clearMqttRuntime();
+        mqttClient_.disconnect();
+        model_.pairing.statusLabel = "Pending";
+        model_.pairing.errorDetail = "";
+        if (lastPairCodeRequestedAt_ == 0 || model_.pairing.pairCode == "------" || model_.pairing.pairUrl.isEmpty()) {
+          Serial.println("[buddy][pair] bootstrap says paired=false, requesting pair code asynchronously");
+          requestPairCode(lastPairCodeRequestedAt_ != 0);
+        } else {
+          Serial.println("[buddy][pair] bootstrap says paired=false");
+        }
+      } else {
+        Serial.printf("[buddy][pair] paired=true mqttTopic=%s pet=%s version=%s\n", bootstrap.mqttTopic.c_str(),
+                      bootstrap.petPackId.c_str(), bootstrap.assetVersion.c_str());
+        const bool wasPaired = model_.pairing.paired;
+        model_.pairing.paired = true;
+        model_.pairing.statusLabel = "Bound";
+        model_.pairing.errorDetail = "";
+        model_.petPackId = bootstrap.petPackId;
+        model_.petName = bootstrap.petName;
+        model_.assetVersion = bootstrap.assetVersion;
+        applyBootstrapToNetwork(bootstrap);
+        mqttClient_.configure(model_.network);
+        if (!wasPaired) {
+          petStatsRuntime_.onPairSuccess(model_);
+        }
+      }
+    }
+  }
 
   if (model_.network.wifiConnected && !lastWifiConnected_) {
     settingsStore_.save(model_.settings);
@@ -167,25 +228,10 @@ void BuddyApp::bootstrapRuntime() {
     return;
   }
 
-  const BootstrapPayload bootstrap = apiClient_.bootstrap(model_.settings);
-  if (bootstrap.ok && bootstrap.paired) {
-    const bool wasPaired = model_.pairing.paired;
-    model_.pairing.paired = true;
-    model_.pairing.statusLabel = "Bound";
+  if (!bootstrapRequestInFlight_ && apiClient_.queueBootstrap(model_.settings)) {
+    bootstrapRequestInFlight_ = true;
+    model_.pairing.statusLabel = "Checking";
     model_.pairing.errorDetail = "";
-    model_.petPackId = bootstrap.petPackId;
-    model_.petName = bootstrap.petName;
-    model_.assetVersion = bootstrap.assetVersion;
-    applyBootstrapToNetwork(bootstrap);
-    mqttClient_.configure(model_.network);
-    if (!wasPaired) {
-      petStatsRuntime_.onPairSuccess(model_);
-    }
-  } else {
-    clearMqttRuntime();
-    mqttClient_.disconnect();
-    Serial.println("[buddy][pair] bootstrap says paired=false, requesting fresh pair code");
-    requestPairCode(true);
   }
 }
 
@@ -431,7 +477,8 @@ void BuddyApp::updateDisplaySleep() {
 }
 
 void BuddyApp::pollPairingBootstrap() {
-  if (!model_.network.wifiConnected || model_.settings.deviceToken.isEmpty() || model_.pairing.paired) {
+  if (pairCodeRequestInFlight_ || bootstrapRequestInFlight_ || !model_.network.wifiConnected ||
+      model_.settings.deviceToken.isEmpty() || model_.pairing.paired) {
     return;
   }
 
@@ -447,32 +494,10 @@ void BuddyApp::pollPairingBootstrap() {
   }
 
   lastPairBootstrapPollAt_ = millis();
-  const BootstrapPayload bootstrap = apiClient_.bootstrap(model_.settings);
-  if (!bootstrap.ok) {
-    model_.pairing.statusLabel = "Bootstrap failed";
-    model_.pairing.errorDetail = bootstrap.error;
-    return;
-  }
-
-  if (!bootstrap.paired) {
-    model_.pairing.statusLabel = "Pending";
-    Serial.println("[buddy][pair] bootstrap says paired=false");
-    return;
-  }
-
-  Serial.printf("[buddy][pair] paired=true mqttTopic=%s pet=%s version=%s\n", bootstrap.mqttTopic.c_str(),
-                bootstrap.petPackId.c_str(), bootstrap.assetVersion.c_str());
-  const bool wasPaired = model_.pairing.paired;
-  model_.pairing.paired = true;
-  model_.pairing.statusLabel = "Bound";
-  model_.pairing.errorDetail = "";
-  model_.petPackId = bootstrap.petPackId;
-  model_.petName = bootstrap.petName;
-  model_.assetVersion = bootstrap.assetVersion;
-  applyBootstrapToNetwork(bootstrap);
-  mqttClient_.configure(model_.network);
-  if (!wasPaired) {
-    petStatsRuntime_.onPairSuccess(model_);
+  if (apiClient_.queueBootstrap(model_.settings)) {
+    bootstrapRequestInFlight_ = true;
+    model_.pairing.statusLabel = "Checking";
+    model_.pairing.errorDetail = "";
   }
 }
 

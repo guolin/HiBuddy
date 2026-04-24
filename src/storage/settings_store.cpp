@@ -44,11 +44,17 @@ bool SettingsStore::begin() {
 DeviceSettings SettingsStore::load() {
   Preferences prefs;
   DeviceSettings settings;
-  if (!prefs.begin(kNamespace, true)) {
+  if (!prefs.begin(kNamespace, false)) {
     return settings;
   }
 
-  settings.deviceId = prefs.getString("device_id", kDefaultDeviceId);
+  const String storedDeviceId = prefs.getString("device_id", "");
+  if (storedDeviceId.isEmpty() || storedDeviceId == "buddy-demo") {
+    settings.deviceId = defaultDeviceId();
+    prefs.putString("device_id", settings.deviceId);
+  } else {
+    settings.deviceId = storedDeviceId;
+  }
   settings.deviceToken = prefs.getString("device_tok", "");
   settings.wifiSsid = prefs.getString("wifi_ssid", "");
   settings.wifiPassword = prefs.getString("wifi_pass", "");
